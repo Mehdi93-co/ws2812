@@ -141,16 +141,28 @@ int main(void)
 
   HAL_TIM_Base_Start_IT(&htim14);
   HAL_RNG_GenerateRandomNumber_IT(&hrng);
-  // HAL_ADC_Start_IT(&hadc1);
+  HAL_ADC_Start_IT(&hadc1);
 
   sprintf(tx_buffer, "========== ws2812 update==========\r\n");
   HAL_UART_Transmit(&huart3, (uint8_t *)tx_buffer, strlen(tx_buffer), 100);
+  for (uint8_t i = 0; i < ws2812Controller.numLeds; i++)
+  {
+    WS2812_SetColor(&ws2812Controller, i, 0, 0, 0);
+  }
+  WS2812_Update(&ws2812Controller);
+  Trigger = FALSE;
 
   while (1)
   {
 
     if (Trigger == TRUE)
     {
+      for (uint8_t i = 0; i < ws2812Controller.numLeds; i++)
+      {
+        WS2812_SetColor(&ws2812Controller, i, 0, 0, 0);
+      }
+      WS2812_Update(&ws2812Controller);
+      HAL_Delay(50);
       if (RNGFlag == TRUE)
       {
         RNGFlag = FALSE;
@@ -158,17 +170,18 @@ int main(void)
       }
       else
         color = 0xc483c3;
+      ws2812Controller.brightness = (uint8_t)(adcValue * 45 / 4096);
       red = (color >> 16) & 0xFF;
       green = (color >> 8) & 0xFF;
       blue = (color >> 0) & 0xFF;
       WS2812_SetColor(&ws2812Controller, led, red, green, blue);
       WS2812_Update(&ws2812Controller);
       (led < ws2812Controller.numLeds) ? led++ : 0;
-      sprintf(tx_buffer, "========== ws2812 adc: %ld==========\r\n", adcValue);
-      HAL_UART_Transmit(&huart3, (uint8_t *)tx_buffer, strlen(tx_buffer), 100);
-      sprintf(tx_buffer, "========== ws2812 adc: %ld==========\r\n", brightness);
-      HAL_UART_Transmit(&huart3, (uint8_t *)tx_buffer, strlen(tx_buffer), 100);
-      // HAL_ADC_Start_IT(&hadc1);
+      /*     sprintf(tx_buffer, "========== ws2812 adc: %ld==========\r\n", adcValue);
+          HAL_UART_Transmit(&huart3, (uint8_t *)tx_buffer, strlen(tx_buffer), 100);
+          sprintf(tx_buffer, "========== ws2812 adc: %ld==========\r\n", brightness);
+          HAL_UART_Transmit(&huart3, (uint8_t *)tx_buffer, strlen(tx_buffer), 100); */
+      HAL_ADC_Start_IT(&hadc1);
 
       Trigger = FALSE;
     }
@@ -483,7 +496,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
   {
     HAL_RNG_GenerateRandomNumber_IT(&hrng);
     Trigger = TRUE;
-    HAL_GPIO_TogglePin(GPIOC, USER_LED_Pin);
+    // HAL_GPIO_TogglePin(GPIOC, USER_LED_Pin);
   }
 }
 
@@ -503,6 +516,7 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
   if (hadc->Instance == ADC1)
   {
     adcValue = HAL_ADC_GetValue(&hadc);
+    HAL_GPIO_TogglePin(GPIOC, USER_LED_Pin);
   }
 }
 /* USER CODE END 4 */
