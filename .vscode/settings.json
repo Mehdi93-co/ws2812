@@ -1,0 +1,9 @@
+{
+  "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+  "cmake.configureOnOpen": true,
+  "files.associations": {
+    "stdio.h": "c",
+    "usb_device.h": "c",
+    "main.h": "c"
+  }
+}

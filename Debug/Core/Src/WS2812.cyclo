@@ -1,0 +1,9 @@
+../Core/Src/WS2812.c:7:6:calculatePulseWidth	2
+../Core/Src/WS2812.c:19:6:WS2812_Init	2
+../Core/Src/WS2812.c:33:6:WS2812_SetColor	2
+../Core/Src/WS2812.c:70:6:WS2812_SetBrightness	2
+../Core/Src/WS2812.c:78:6:WS2812_Update	6
+../Core/Src/WS2812.c:132:6:WS2812_Reset	2
+../Core/Src/WS2812.c:146:6:WS2812_Deinit	1
+../Core/Src/WS2812.c:150:6:WS2812_Print	2
+../Core/Src/WS2812.c:167:6:UART_NewLine	1

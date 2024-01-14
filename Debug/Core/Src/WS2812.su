@@ -1,0 +1,9 @@
+../Core/Src/WS2812.c:7:6:calculatePulseWidth	16	static
+../Core/Src/WS2812.c:19:6:WS2812_Init	48	static
+../Core/Src/WS2812.c:33:6:WS2812_SetColor	112	static
+../Core/Src/WS2812.c:70:6:WS2812_SetBrightness	16	static
+../Core/Src/WS2812.c:78:6:WS2812_Update	120	dynamic
+../Core/Src/WS2812.c:132:6:WS2812_Reset	48	static
+../Core/Src/WS2812.c:146:6:WS2812_Deinit	16	static
+../Core/Src/WS2812.c:150:6:WS2812_Print	112	static
+../Core/Src/WS2812.c:167:6:UART_NewLine	16	static
