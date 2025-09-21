@@ -6,6 +6,7 @@
 #include <string.h>
 #include <stdio.h>
 
+#define Debug_Mode
 #define NUM_LEDS 12
 #define HIGH_BIT 61
 #define LOW_BIT 31
@@ -31,5 +32,6 @@ void WS2812_Update(WS2812Controller *controller);
 void WS2812_Reset(WS2812Controller *controller);
 void WS2812_Print(WS2812Controller *controller);
 void UART_NewLine(WS2812Controller *controller);
+uint8_t gammaCorrect(uint8_t value);
 
 #endif // WS2812CONTROLLER_H

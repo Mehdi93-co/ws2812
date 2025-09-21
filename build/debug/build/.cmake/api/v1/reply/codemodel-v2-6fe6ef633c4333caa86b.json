@@ -8,7 +8,7 @@
 					"build" : ".",
 					"minimumCMakeVersion" : 
 					{
-						"string" : "3.20"
+						"string" : "3.19.0"
 					},
 					"projectIndex" : 0,
 					"source" : ".",
@@ -38,7 +38,7 @@
 				{
 					"directoryIndex" : 0,
 					"id" : "WS2812Controller::@6890427a1f51a3e7e1df",
-					"jsonFile" : "target-WS2812Controller-Debug-022153163e65ea7059ef.json",
+					"jsonFile" : "target-WS2812Controller-Debug-e033c38e94d6a66e792e.json",
 					"name" : "WS2812Controller",
 					"projectIndex" : 0
 				}

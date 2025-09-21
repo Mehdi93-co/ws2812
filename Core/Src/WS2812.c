@@ -16,6 +16,7 @@ void calculatePulseWidth(uint8_t value, uint16_t *pulseWith)
     }
 }
 
+
 void WS2812_Init(WS2812Controller *controller, TIM_HandleTypeDef *htim, UART_HandleTypeDef *huart, uint32_t channel, uint16_t numLeds)
 {
     char str[] = "WS2812_Init\r\n";
@@ -35,12 +36,20 @@ void WS2812_SetColor(WS2812Controller *controller, uint16_t index, uint8_t red, 
     char str[80];
     if (index < controller->numLeds)
     {
-        float angle = 90 - controller->brightness; // in Grad
-        angle = angle * _PI / 180;                 // in Rad
-        // Apply brightness
-        red = red / tan(angle);
-        green = green / tan(angle);
-        blue = blue / tan(angle);
+        /*        float angle = 90 - controller->brightness; // in Grad
+               angle = angle * _PI / 180;                 // in Rad
+               // Apply brightness
+               red = red / tan(angle);
+               green = green / tan(angle);
+               blue = blue / tan(angle); */
+        float brightnessFactor = controller->brightness / 255.0f; // brightness: 0-255
+        red = (uint8_t)(red * brightnessFactor);
+        green = (uint8_t)(green * brightnessFactor);
+        blue = (uint8_t)(blue * brightnessFactor);
+        // Gamma-Korrektur anwenden
+        red = gammaCorrect(red);
+        green = gammaCorrect(green);
+        blue = gammaCorrect(blue);
 
         red = (red > 255) ? 255 : ((red < 0) ? 0 : red);
         green = (green > 255) ? 255 : ((green < 0) ? 0 : green);
@@ -69,8 +78,8 @@ void WS2812_SetColor(WS2812Controller *controller, uint16_t index, uint8_t red, 
 
 void WS2812_SetBrightness(WS2812Controller *controller, uint8_t brightness)
 {
-    if (brightness > 45)
-        controller->brightness = 45;
+    if (brightness > 255)
+        controller->brightness = 255;
     else
         controller->brightness = brightness;
 }
@@ -82,6 +91,11 @@ void WS2812_Update(WS2812Controller *controller)
 
     uint16_t pwmData[(controller->numLeds * 24) + DELAY]; // 222 bits 24 bit/LED
     // Convert RGB data to PWM data
+    for (uint16_t index = 0; index < ((controller->numLeds * 24) + DELAY); index++)
+    {
+        pwmData[index] = 0;
+    }
+
     uint32_t pwmIndex = 0;
     uint32_t color = 0;
     uint16_t pulseWith = 0;
@@ -118,7 +132,7 @@ void WS2812_Update(WS2812Controller *controller)
     }
 #endif
 
-    HAL_StatusTypeDef status = HAL_TIM_PWM_Start_DMA(controller->htim, TIM_CHANNEL_1, (uint32_t *)pwmData, pwmIndex);
+    HAL_StatusTypeDef status = HAL_TIM_PWM_Start_DMA(controller->htim, TIM_CHANNEL_1, (uint32_t *)pwmData, 320);
 
     while (status != HAL_OK)
     {
@@ -167,4 +181,10 @@ void WS2812_Print(WS2812Controller *controller)
 void UART_NewLine(WS2812Controller *controller)
 {
     //  HAL_UART_Transmit(controller->huart, "\r\n", strlen("\r\n"), 100);
+}
+
+uint8_t gammaCorrect(uint8_t value)
+{
+    float gamma = 2.8; // Typischer Gamma-Wert für LEDs
+    return (uint8_t)(pow((float)value / 255.0, gamma) * 255.0);
 }

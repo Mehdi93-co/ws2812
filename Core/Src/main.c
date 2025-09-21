@@ -18,12 +18,14 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "usb_device.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <string.h>
 #include <stdio.h>
 #include "WS2812.h"
+#include "usbd_cdc_if.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -54,8 +56,8 @@ UART_HandleTypeDef huart3;
 DMA_HandleTypeDef hdma_usart3_rx;
 
 /* USER CODE BEGIN PV */
-uint8_t DMA_FINISH = 0;
-uint8_t Trigger = 0;
+uint8_t DMA_FINISH = FALSE;
+uint8_t Trigger = TRUE;
 uint8_t RNGFlag = FALSE;
 uint32_t adcValue = 0;
 
@@ -85,6 +87,7 @@ void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim);
  */
 int main(void)
 {
+
   /* USER CODE BEGIN 1 */
   uint8_t status = 0;
   uint8_t led = 0;
@@ -93,12 +96,13 @@ int main(void)
   uint8_t red = 0;
   uint8_t green = 0;
   uint8_t blue = 0;
-  uint32_t brightness = 0;
+  uint32_t brightness = 128;
 
   char tx_begin[] = "/* ========== main begin  ========== */\r\n";
   char tx_buffer[50];
   WS2812Controller ws2812Controller;
   HAL_UART_Transmit(&huart3, (uint8_t *)tx_begin, strlen(tx_begin), 100);
+  // CDC_Transmit_FS((uint8_t *)tx_begin, strlen(tx_begin));
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -125,72 +129,82 @@ int main(void)
   MX_TIM14_Init();
   MX_RNG_Init();
   MX_ADC1_Init();
+  MX_USB_DEVICE_Init();
   /* USER CODE BEGIN 2 */
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   WS2812_Init(&ws2812Controller, &htim3, &huart3, TIM_CHANNEL_1, NUM_LEDS);
-  WS2812_SetBrightness(&ws2812Controller, 5);
+  // WS2812_SetBrightness(&ws2812Controller, 128);
   sprintf(tx_buffer, "========== ws2812 SetBrightness==========\r\n");
   HAL_UART_Transmit(&huart3, (uint8_t *)tx_buffer, strlen(tx_buffer), 100);
-  // WS2812_Reset(&ws2812Controller);
-  WS2812_Print(&ws2812Controller);
+  //  WS2812_Reset(&ws2812Controller);
+  // WS2812_Print(&ws2812Controller);
   sprintf(tx_buffer, "========== ws2812 reset==========\r\n");
   HAL_UART_Transmit(&huart3, (uint8_t *)tx_buffer, strlen(tx_buffer), 100);
 
-  HAL_TIM_Base_Start_IT(&htim14);
-  HAL_RNG_GenerateRandomNumber_IT(&hrng);
-  HAL_ADC_Start_IT(&hadc1);
+  // HAL_TIM_Base_Start_IT(&htim14);
+  //  HAL_RNG_GenerateRandomNumber_IT(&hrng);
+  //   HAL_ADC_Start_IT(&hadc1);
 
   sprintf(tx_buffer, "========== ws2812 update==========\r\n");
   HAL_UART_Transmit(&huart3, (uint8_t *)tx_buffer, strlen(tx_buffer), 100);
   for (uint8_t i = 0; i < ws2812Controller.numLeds; i++)
   {
     WS2812_SetColor(&ws2812Controller, i, 0, 0, 0);
+    WS2812_Update(&ws2812Controller);
   }
-  WS2812_Update(&ws2812Controller);
-  Trigger = FALSE;
+  // Trigger = FALSE;
 
   while (1)
   {
+    HAL_GPIO_TogglePin(GPIOC, USER_LED_Pin);
+    HAL_Delay(200);
+    HAL_GPIO_TogglePin(GPIOC, USER_LED_Pin);
 
-    if (Trigger == TRUE)
+    // if ((Trigger == TRUE))
+    //{
+    for (uint8_t i = 0; i < ws2812Controller.numLeds; i++)
     {
-      for (uint8_t i = 0; i < ws2812Controller.numLeds; i++)
-      {
-        WS2812_SetColor(&ws2812Controller, i, 0, 0, 0);
-      }
-      WS2812_Update(&ws2812Controller);
-      HAL_Delay(50);
-      if (RNGFlag == TRUE)
-      {
-        RNGFlag = FALSE;
-        color = HAL_RNG_ReadLastRandomNumber(&hrng);
-      }
-      else
-        color = 0xc483c3;
-      ws2812Controller.brightness = (uint8_t)(adcValue * 45 / 4096);
-      red = (color >> 16) & 0xFF;
-      green = (color >> 8) & 0xFF;
-      blue = (color >> 0) & 0xFF;
+      WS2812_SetColor(&ws2812Controller, i, 0, 0, 0);
+    }
+    WS2812_Update(&ws2812Controller);
+    HAL_Delay(50);
+    // if (RNGFlag == TRUE)
+    //{
+    //  RNGFlag = FALSE;
+    // color = HAL_RNG_ReadLastRandomNumber(&hrng);
+    //}
+    // else
+    color = 0xc483c3;
+    adcValue = 100;
+    ws2812Controller.brightness = (uint8_t)(adcValue * 45 / 4096);
+    red = (color >> 16) & 0xFF;
+    green = (color >> 8) & 0xFF;
+    blue = (color >> 0) & 0xFF;
+    WS2812_SetBrightness(&ws2812Controller, brightness);
+    for (uint8_t i = 0; i < 12; i++)
+    {
       WS2812_SetColor(&ws2812Controller, led, red, green, blue);
       WS2812_Update(&ws2812Controller);
-      (led < ws2812Controller.numLeds) ? led++ : 0;
-      /*     sprintf(tx_buffer, "========== ws2812 adc: %ld==========\r\n", adcValue);
+      HAL_Delay(50);
+    }
+    //(led < ws2812Controller.numLeds) ? led++ : 0;
+    /*       sprintf(tx_buffer, "========== ws2812 adc: %ld==========\r\n", adcValue);
           HAL_UART_Transmit(&huart3, (uint8_t *)tx_buffer, strlen(tx_buffer), 100);
           sprintf(tx_buffer, "========== ws2812 adc: %ld==========\r\n", brightness);
           HAL_UART_Transmit(&huart3, (uint8_t *)tx_buffer, strlen(tx_buffer), 100); */
-      HAL_ADC_Start_IT(&hadc1);
-
-      Trigger = FALSE;
-    }
+    // HAL_ADC_Start_IT(&hadc1);
+    // Trigger = FALSE;
+    //} */
   }
   /* USER CODE END WHILE */
 
   /* USER CODE BEGIN 3 */
+
+  /* USER CODE END 3 */
 }
-/* USER CODE END 3 */
 
 /**
  * @brief System Clock Configuration
@@ -216,7 +230,7 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.PLL.PLLM = 6;
   RCC_OscInitStruct.PLL.PLLN = 72;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
-  RCC_OscInitStruct.PLL.PLLQ = 7;
+  RCC_OscInitStruct.PLL.PLLQ = 3;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
@@ -334,7 +348,7 @@ static void MX_TIM3_Init(void)
   htim3.Instance = TIM3;
   htim3.Init.Prescaler = 0;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 99 - 1;
+  htim3.Init.Period = 90 - 1;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
@@ -388,7 +402,7 @@ static void MX_TIM14_Init(void)
   htim14.Instance = TIM14;
   htim14.Init.Prescaler = 8000 - 1;
   htim14.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim14.Init.Period = 10000 - 1;
+  htim14.Init.Period = 1000 - 1;
   htim14.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim14.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim14) != HAL_OK)
@@ -495,8 +509,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
   if (htim->Instance == TIM14)
   {
     HAL_RNG_GenerateRandomNumber_IT(&hrng);
-    Trigger = TRUE;
-    // HAL_GPIO_TogglePin(GPIOC, USER_LED_Pin);
+    // Trigger = TRUE;
+    //  HAL_GPIO_TogglePin(GPIOC, USER_LED_Pin);
   }
 }
 
@@ -515,8 +529,8 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 {
   if (hadc->Instance == ADC1)
   {
-    adcValue = HAL_ADC_GetValue(&hadc);
-    HAL_GPIO_TogglePin(GPIOC, USER_LED_Pin);
+    adcValue = HAL_ADC_GetValue(&hadc1);
+    // HAL_GPIO_TogglePin(GPIOC, USER_LED_Pin);
   }
 }
 /* USER CODE END 4 */
