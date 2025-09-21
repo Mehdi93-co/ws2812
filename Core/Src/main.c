@@ -101,8 +101,9 @@ int main(void)
   char tx_begin[] = "/* ========== main begin  ========== */\r\n";
   char tx_buffer[50];
   WS2812Controller ws2812Controller;
-  HAL_UART_Transmit(&huart3, (uint8_t *)tx_begin, strlen(tx_begin), 100);
-  // CDC_Transmit_FS((uint8_t *)tx_begin, strlen(tx_begin));
+
+  // HAL_UART_Transmit(&huart3, (uint8_t *)tx_begin, strlen(tx_begin), 100);
+  //  CDC_Transmit_FS((uint8_t *)tx_begin, strlen(tx_begin));
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -136,6 +137,11 @@ int main(void)
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   WS2812_Init(&ws2812Controller, &htim3, &huart3, TIM_CHANNEL_1, NUM_LEDS);
+  sprintf(tx_buffer, "========== ws2812 init==========\r\n");
+  HAL_UART_Transmit(&huart3, (uint8_t *)tx_buffer, strlen(tx_buffer), 100);
+
+  // Oder alle Tests:
+  WS2812_Test_Complete(&ws2812Controller); // Komplette Test-Suite
   // WS2812_SetBrightness(&ws2812Controller, 128);
   sprintf(tx_buffer, "========== ws2812 SetBrightness==========\r\n");
   HAL_UART_Transmit(&huart3, (uint8_t *)tx_buffer, strlen(tx_buffer), 100);
@@ -157,20 +163,21 @@ int main(void)
   }
   // Trigger = FALSE;
 
+  uint8_t brughtness = 0;
+  uint8_t step = 5;
+
   while (1)
   {
     HAL_GPIO_TogglePin(GPIOC, USER_LED_Pin);
     HAL_Delay(200);
     HAL_GPIO_TogglePin(GPIOC, USER_LED_Pin);
 
+    WS2812_SetBrightness(&ws2812Controller, 50);
+    WS2812_Test_Rainbow(&ws2812Controller);
+
     // if ((Trigger == TRUE))
     //{
-    for (uint8_t i = 0; i < ws2812Controller.numLeds; i++)
-    {
-      WS2812_SetColor(&ws2812Controller, i, 0, 0, 0);
-    }
-    WS2812_Update(&ws2812Controller);
-    HAL_Delay(50);
+
     // if (RNGFlag == TRUE)
     //{
     //  RNGFlag = FALSE;
@@ -178,23 +185,23 @@ int main(void)
     //}
     // else
     color = 0xc483c3;
-    adcValue = 100;
-    ws2812Controller.brightness = (uint8_t)(adcValue * 45 / 4096);
     red = (color >> 16) & 0xFF;
     green = (color >> 8) & 0xFF;
     blue = (color >> 0) & 0xFF;
-    WS2812_SetBrightness(&ws2812Controller, brightness);
-    for (uint8_t i = 0; i < 12; i++)
+    // brightness = (uint32_t)(adcValue * 255 / 4096);
+
+    WS2812_SetBrightness(&ws2812Controller, 100);
+    for (uint8_t i = 0; i < ws2812Controller.numLeds; i++)
     {
-      WS2812_SetColor(&ws2812Controller, led, red, green, blue);
-      WS2812_Update(&ws2812Controller);
-      HAL_Delay(50);
+      WS2812_SetColor(&ws2812Controller, i, red, green, blue);
     }
+    WS2812_Update(&ws2812Controller);
+    HAL_Delay(50);
     //(led < ws2812Controller.numLeds) ? led++ : 0;
     /*       sprintf(tx_buffer, "========== ws2812 adc: %ld==========\r\n", adcValue);
-          HAL_UART_Transmit(&huart3, (uint8_t *)tx_buffer, strlen(tx_buffer), 100);
-          sprintf(tx_buffer, "========== ws2812 adc: %ld==========\r\n", brightness);
-          HAL_UART_Transmit(&huart3, (uint8_t *)tx_buffer, strlen(tx_buffer), 100); */
+        HAL_UART_Transmit(&huart3, (uint8_t *)tx_buffer, strlen(tx_buffer), 100);
+        sprintf(tx_buffer, "========== ws2812 adc: %ld==========\r\n", brightness);
+        HAL_UART_Transmit(&huart3, (uint8_t *)tx_buffer, strlen(tx_buffer), 100); */
     // HAL_ADC_Start_IT(&hadc1);
     // Trigger = FALSE;
     //} */

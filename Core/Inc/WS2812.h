@@ -34,4 +34,12 @@ void WS2812_Print(WS2812Controller *controller);
 void UART_NewLine(WS2812Controller *controller);
 uint8_t gammaCorrect(uint8_t value);
 
+
+void WS2812_Test_Basic(WS2812Controller *controller);
+void WS2812_Test_RunningLight(WS2812Controller *controller);
+void WS2812_Test_Rainbow(WS2812Controller *controller);
+void WS2812_Test_Brightness(WS2812Controller *controller);
+void WS2812_Test_Complete(WS2812Controller *controller);
+void HSV_to_RGB(float h, float s, float v, uint8_t *r, uint8_t *g, uint8_t *b);
+
 #endif // WS2812CONTROLLER_H
