@@ -1,5 +1,6 @@
 
 #include "settings.h"
+#include "watchdog.h"
 #include <stddef.h>
 #include <string.h>
 
@@ -191,7 +192,9 @@ HAL_StatusTypeDef Settings_Save(const Settings *s)
     {
         if (next >= SLOT_COUNT)
         {
-            // Alle Plaetze belegt: einmal loeschen (dauert 1-2 s, die CPU steht in der Zeit)
+            // Alle Plaetze belegt: einmal loeschen (dauert 1-2 s, die CPU steht in der Zeit).
+            // Watchdog vorher fuettern, damit die volle Zeit zur Verfuegung steht.
+            Watchdog_Feed();
             if (eraseSector() != HAL_OK)
                 break;
             next = 0;

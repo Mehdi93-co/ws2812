@@ -54,7 +54,7 @@ Hardware: Adafruit Feather STM32F405, OLED FeatherWing 128x64 (SH1107), LPS22, H
 - [ ] Trend und Verlauf über einen Reset hinweg erhalten (Flash oder SD)
 
 ### Robustheit
-- [ ] Watchdog (IWDG) für den Dauerbetrieb
+- [x] Watchdog (IWDG, 4 s) für den Dauerbetrieb, Anzeige des letzten Reset-Grunds
 - [ ] Onboard-NeoPixel (PC0) als Status-LED: grün = alles ok, rot = Sensor fehlt
 - [ ] Gamma-Korrektur als Tabelle statt `pow()` in `WS2812_SetColor`
 

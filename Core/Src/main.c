@@ -29,6 +29,7 @@
 #include "i2c_bus.h"
 #include "app.h"
 #include "bootloader.h"
+#include "watchdog.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -94,6 +95,7 @@ int main(void)
   /* USER CODE BEGIN 1 */
   // Muss vor jeder Initialisierung stehen: springt bei Bedarf in den USB-DFU-Bootloader
   Bootloader_CheckAndJump();
+  Watchdog_ReadResetCause();
 
   uint8_t brightness = 128;
 
@@ -144,9 +146,13 @@ int main(void)
 
   App_Init(&ws2812Controller, &huart3);
 
+  // Erst nach der Initialisierung starten: Selbsttest und Sensor-Suche dauern einige Sekunden
+  Watchdog_Start();
+
   uint32_t tLed = HAL_GetTick();
   while (1)
   {
+    Watchdog_Feed();
     App_Process();
 
     // Rote Board-LED blinkt als Lebenszeichen

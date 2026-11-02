@@ -100,6 +100,7 @@ target_sources(
     "Core\\Src\\settings.c"
     "Core\\Src\\lueft.c"
     "Core\\Src\\schimmel.c"
+    "Core\\Src\\watchdog.c"
     "Core\\Startup\\startup_stm32f405rgtx.s"
     "Middlewares\\ST\\STM32_USB_Device_Library\\Class\\CDC\\Src\\usbd_cdc.c"
     "Middlewares\\ST\\STM32_USB_Device_Library\\Core\\Src\\usbd_core.c"

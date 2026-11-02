@@ -12,6 +12,7 @@
 #include "settings.h"
 #include "lueft.h"
 #include "schimmel.h"
+#include "watchdog.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1324,6 +1325,15 @@ static void printStatus(void)
     char line[64];
 
     Log_Print("\r\n/* ========== WS2812 Wetterstation ========== */\r\n");
+    sprintf(line, "Letzter Neustart: %s\r\n", Watchdog_ResetCauseName());
+    Log_Print(line);
+    if (Watchdog_WasWatchdogReset())
+        Log_Print("ACHTUNG: Die Firmware hing und wurde vom Watchdog neu gestartet!\r\n");
+    if (Watchdog_IsRunning())
+        sprintf(line, "Watchdog: aktiv (%u ms)\r\n", WATCHDOG_TIMEOUT_MS);
+    else
+        strcpy(line, "Watchdog: noch nicht gestartet\r\n");
+    Log_Print(line);
     I2C_Bus_Scan(Log_Print);
 
     Log_Print(displayOk ? "SH1107 OK\r\n" : "SH1107 nicht gefunden (0x3C)\r\n");
@@ -1446,6 +1456,7 @@ static void printHelp(void)
               "  defaults          alle Einstellungen auf Werkseinstellung\r\n"
               "  test schimmel     Schimmel-Warnung ca. 1 min lang vorfuehren\r\n"
               "  test sturm        Sturmwarnung 1 min lang vorfuehren\r\n"
+              "  test watchdog     Firmware absichtlich aufhaengen, Watchdog startet neu\r\n"
               "  Einstellungen werden automatisch im Flash gespeichert.\r\n"
               "  dfu               in den USB-Bootloader springen (Firmware-Update)\r\n"
               "  reset             Neustart\r\n");
@@ -1580,6 +1591,16 @@ static void handleCommand(char *line)
     else if (strcmp(cmd, "set") == 0)
     {
         handleSet(args);
+    }
+    else if (strcmp(cmd, "test") == 0 && args && strcmp(args, "watchdog") == 0)
+    {
+        saveCfgNow();
+        Log_Print("Test: Firmware haengt jetzt absichtlich, der Watchdog startet in ~4 s neu...\r\n");
+        flushLog(200);
+        while (1)
+        {
+            // absichtlich kein Watchdog_Feed()
+        }
     }
     else if (strcmp(cmd, "test") == 0 && args && strcmp(args, "sturm") == 0)
     {
