@@ -44,7 +44,7 @@ Hardware: Adafruit Feather STM32F405, OLED FeatherWing 128x64 (SH1107), LPS22, H
 - [x] BMP180/BMP280 als Wandsensor: gemessene statt geschätzte Wandtemperatur (`set wallsensor`)
 
 ### Wetter
-- [ ] Sturmwarnung: Druckabfall > 3 hPa in 3 h, LEDs pulsieren rot
+- [x] Sturmwarnung: Druckabfall ≥ 3 hPa (möglich) / ≥ 6 hPa (wahrscheinlich) in 3 h, LEDs blitzen
 - [ ] Höhe über Meer aus dem Luftdruck
 
 ### Daten und PC

@@ -59,6 +59,7 @@
 #define BREATH_PERIOD_MS 3000 // Lueften laeuft: blaues "Atmen", Dauer eines Atemzugs
 #define DONE_BLINK_MS 500     // Fenster kann zu: gruenes Blinken
 #define MOLD_PULSE_PERIOD_MS 4000 // Schimmel-Warnung: violettes Pulsieren
+#define LIGHTNING_FLASH_MS 60     // Sturmwarnung: Dauer eines Blitzes
 
 // Verlaufsdiagramm: ein Punkt pro Pixelspalte
 #define GRAPH_INTERVAL_MS 10000UL // 128 Punkte x 10 s = ca. 21 min
@@ -68,6 +69,13 @@
 #define TREND_SAMPLES 19           // 18 x 10 min = 3 h
 #define TREND_MIN_SAMPLES 4        // Trend erst nach 30 min anzeigen
 #define TREND_THRESHOLD 1.6f       // hPa pro 3 h
+
+// Sturmwarnung: Druckabfall pro 3 h
+#define STORM_POSSIBLE_DROP 3.0f // Sturm moeglich
+#define STORM_STRONG_DROP 6.0f   // Sturm wahrscheinlich
+#define STORM_HYST 0.5f          // Warnung geht erst bei 0.5 hPa weniger Abfall zurueck
+#define STORM_MIN_SAMPLES 7      // mindestens 1 h Verlauf, kurze Spannen wuerden zu stark hochrechnen
+#define STORM_TEST_MS 60000UL    // "test sturm" dauert 1 min
 
 /* ---------- Typen ---------- */
 typedef enum
@@ -85,6 +93,13 @@ typedef enum
     TREND_STABIL,
     TREND_STEIGEND
 } Trend;
+
+typedef enum
+{
+    STURM_KEINER,
+    STURM_MOEGLICH,      // Druckabfall >= 3 hPa in 3 h
+    STURM_WAHRSCHEINLICH // Druckabfall >= 6 hPa in 3 h
+} SturmLevel;
 
 typedef enum
 {
@@ -156,21 +171,32 @@ static AmpelState ampel = AMPEL_GRUEN;
 static AmpelState ampelShown = (AmpelState)0xFF; // was zuletzt auf den LEDs war
 
 static uint8_t rainbowOffset;
-static uint32_t tRainbow; // letztes Bild der Lueft-Animation
+static uint32_t tRainbow; // letztes Bild der LED-Animation
+
+static SturmLevel sturm;
+static uint8_t sturmTest; // "test sturm" laeuft
+static uint32_t tSturmTestUntil;
 
 // Wer die LEDs gerade steuert, nach Wichtigkeit:
-// 1. Lueft-Assistent (der Nutzer soll etwas tun), 2. Schimmel-Warnung, 3. Temperatur-Ampel
+// 1. Sturm wahrscheinlich (Fenster zu!), 2. Lueft-Assistent, 3. Sturm moeglich,
+// 4. Schimmel-Warnung, 5. Temperatur-Ampel
 typedef enum
 {
     LED_AMPEL,
+    LED_STURM_STARK,
     LED_LUEFT,
+    LED_STURM,
     LED_SCHIMMEL
 } LedMode;
 
 static LedMode ledMode(void)
 {
+    if (sturm == STURM_WAHRSCHEINLICH)
+        return LED_STURM_STARK;
     if (Lueft_GetState() != LUEFT_AUS)
         return LED_LUEFT;
+    if (sturm == STURM_MOEGLICH)
+        return LED_STURM;
     if (Schimmel_IsWarning())
         return LED_SCHIMMEL;
     return LED_AMPEL;
@@ -415,8 +441,43 @@ static float pulseLevel(uint32_t now, uint32_t periodMs)
     return 0.5f - 0.5f * cosf(6.2831853f * phase);
 }
 
-// LED-Animationen von Lueft-Assistent und Schimmel-Warnung, sonst die Ampel
-//   Lueften noetig = Regenbogen, laeuft = blau atmend, fertig = gruen blinkend
+// Einfacher Zufallsgenerator (xorshift32) fuer unregelmaessige Blitze
+static uint32_t randomNext(void)
+{
+    static uint32_t state = 0x1234ABCDUL;
+    state ^= state << 13;
+    state ^= state >> 17;
+    state ^= state << 5;
+    return state;
+}
+
+// Gewitter: dunkler Sturmhimmel, dazwischen kurze weisse Blitze (manchmal doppelt)
+static void drawLightning(uint32_t now, uint8_t strong)
+{
+    static uint32_t tFlash, tNextFlash;
+    static uint8_t doubleFlash;
+
+    if ((int32_t)(now - tNextFlash) >= 0)
+    {
+        tFlash = now;
+        doubleFlash = randomNext() & 1;
+        // Sturm wahrscheinlich: alle 0.5-2.5 s, Sturm moeglich: alle 2-7 s
+        uint32_t minGap = strong ? 500 : 2000;
+        uint32_t range = strong ? 2000 : 5000;
+        tNextFlash = now + minGap + randomNext() % range;
+    }
+
+    uint32_t since = now - tFlash;
+    uint8_t flashOn = since < LIGHTNING_FLASH_MS ||
+                      (doubleFlash && since >= 3 * LIGHTNING_FLASH_MS && since < 4 * LIGHTNING_FLASH_MS);
+    if (flashOn)
+        drawSolid(255, 255, 255);
+    else
+        drawSolid(0, 0, 25); // dunkles Blaugrau
+}
+
+// LED-Animationen nach Prioritaet (siehe ledMode), sonst die Ampel
+//   Sturm = Blitze, Lueften noetig = Regenbogen, laeuft = blau atmend, fertig = gruen blinkend
 //   Schimmel-Warnung = violett pulsierend
 static void animateLeds(uint32_t now)
 {
@@ -438,6 +499,11 @@ static void animateLeds(uint32_t now)
         return;
     tRainbow = now;
 
+    if (mode == LED_STURM_STARK || mode == LED_STURM)
+    {
+        drawLightning(now, mode == LED_STURM_STARK);
+        return;
+    }
     if (mode == LED_SCHIMMEL)
     {
         float level = pulseLevel(now, MOLD_PULSE_PERIOD_MS);
@@ -593,21 +659,90 @@ static void updateSchimmel(uint32_t now)
 }
 
 /* ---------- Wettertrend ---------- */
-static Trend getTrend(void)
+// Druckaenderung hochgerechnet auf 3 h. Gibt 0 zurueck, solange weniger als minSamples Werte da sind.
+static uint8_t pressureChange3h(float *per3h, uint8_t minSamples)
 {
-    if (trend.count < TREND_MIN_SAMPLES)
-        return TREND_UNBEKANNT;
+    if (trend.count < minSamples || trend.count < 2)
+        return 0;
 
     float oldest = ringGet(&trend, 0);
     float newest = ringGet(&trend, trend.count - 1);
     float spanMinutes = (trend.count - 1) * (TREND_INTERVAL_MS / 60000.0f);
-    float per3h = (newest - oldest) * (180.0f / spanMinutes);
+    *per3h = (newest - oldest) * (180.0f / spanMinutes);
+    return 1;
+}
+
+static Trend getTrend(void)
+{
+    float per3h;
+    if (!pressureChange3h(&per3h, TREND_MIN_SAMPLES))
+        return TREND_UNBEKANNT;
 
     if (per3h >= TREND_THRESHOLD)
         return TREND_STEIGEND;
     if (per3h <= -TREND_THRESHOLD)
         return TREND_FALLEND;
     return TREND_STABIL;
+}
+
+/* ---------- Sturmwarnung ---------- */
+// Barometer-Faustregel: schneller Druckabfall kuendigt Wind bzw. Sturm an
+static void updateSturm(uint32_t now)
+{
+    SturmLevel level = sturm;
+    float per3h;
+
+    if (sturmTest && (int32_t)(now - tSturmTestUntil) >= 0)
+        sturmTest = 0;
+
+    if (sturmTest)
+    {
+        level = STURM_WAHRSCHEINLICH;
+    }
+    else if (!pressureChange3h(&per3h, STORM_MIN_SAMPLES))
+    {
+        level = STURM_KEINER;
+    }
+    else
+    {
+        float drop = -per3h; // positiv = Druck faellt
+        switch (level)
+        {
+        case STURM_KEINER:
+            if (drop >= STORM_STRONG_DROP)
+                level = STURM_WAHRSCHEINLICH;
+            else if (drop >= STORM_POSSIBLE_DROP)
+                level = STURM_MOEGLICH;
+            break;
+        case STURM_MOEGLICH:
+            if (drop >= STORM_STRONG_DROP)
+                level = STURM_WAHRSCHEINLICH;
+            else if (drop < STORM_POSSIBLE_DROP - STORM_HYST)
+                level = STURM_KEINER;
+            break;
+        case STURM_WAHRSCHEINLICH:
+            if (drop < STORM_POSSIBLE_DROP - STORM_HYST)
+                level = STURM_KEINER;
+            else if (drop < STORM_STRONG_DROP - STORM_HYST)
+                level = STURM_MOEGLICH;
+            break;
+        }
+    }
+
+    if (level == sturm)
+        return;
+
+    uint8_t worse = level > sturm;
+    sturm = level;
+    if (sturm == STURM_WAHRSCHEINLICH)
+        Log_Print("Sturmwarnung: Sturm wahrscheinlich, Fenster schliessen!\r\n");
+    else if (sturm == STURM_MOEGLICH)
+        Log_Print("Sturmwarnung: Sturm moeglich, Wind kommt auf\r\n");
+    else
+        Log_Print("Sturmwarnung beendet\r\n");
+    if (worse)
+        wakeDisplay();
+    displayDirty = 1;
 }
 
 /* ---------- Messung ---------- */
@@ -850,8 +985,28 @@ static void drawPageWerte(void)
     char value[16];
     char line[24];
 
+    uint32_t now = HAL_GetTick();
+    float per3h;
+
     drawHeader("Druck");
-    SH1107_DrawString(36, 0, trendText[getTrend()], 1);
+    if (sturm != STURM_KEINER)
+    {
+        // Abwechselnd "! Sturm" und der Druckabfall, z.B. "-4.2/3h"
+        if (((now / 2000) & 1) && pressureChange3h(&per3h, STORM_MIN_SAMPLES))
+        {
+            formatFixed1(value, per3h);
+            sprintf(line, "%s/3h", value);
+            SH1107_DrawString(36, 0, line, 1);
+        }
+        else
+        {
+            SH1107_DrawString(36, 0, "! Sturm", 1);
+        }
+    }
+    else
+    {
+        SH1107_DrawString(36, 0, trendText[getTrend()], 1);
+    }
     formatFixed1(value, pressure);
     sprintf(line, "%s hPa", value);
     SH1107_DrawString(0, 9, line, 2);
@@ -861,9 +1016,14 @@ static void drawPageWerte(void)
     sprintf(line, "%s" SH1107_DEG "C", value);
     SH1107_DrawString(0, 37, line, 2);
 
-    const char *lueftText = lueftStatusText(HAL_GetTick(), line);
-    if (lueftText)
+    // Gleiche Reihenfolge wie bei den LEDs (ledMode)
+    const char *lueftText = lueftStatusText(now, line);
+    if (sturm == STURM_WAHRSCHEINLICH)
+        SH1107_DrawString(0, 56, "Sturm wahrscheinlich!", 1);
+    else if (lueftText)
         SH1107_DrawString(0, 56, lueftText, 1);
+    else if (sturm == STURM_MOEGLICH)
+        SH1107_DrawString(0, 56, "Sturm moeglich!", 1);
     else if (Schimmel_IsWarning())
         SH1107_DrawString(0, 56, "Schimmel-Warnung!", 1);
     else
@@ -1112,8 +1272,20 @@ static void printValues(void)
         return;
     formatFixed1(p, pressure);
     formatFixed1(t, temperature);
-    sprintf(line, "Druck: %s hPa, Temp: %s C%s\r\n", p, t, sensorOk ? "" : " (Sensor Fehler)");
+    sprintf(line, "Druck: %s hPa, Temp: %s C%s", p, t, sensorOk ? "" : " (Sensor Fehler)");
     Log_Print(line);
+    float per3h;
+    if (pressureChange3h(&per3h, TREND_MIN_SAMPLES))
+    {
+        formatFixed1(p, per3h);
+        sprintf(line, ", Aenderung %s hPa/3h", p);
+        Log_Print(line);
+    }
+    if (sturm == STURM_WAHRSCHEINLICH)
+        Log_Print(", STURM WAHRSCHEINLICH");
+    else if (sturm == STURM_MOEGLICH)
+        Log_Print(", Sturm moeglich");
+    Log_Print("\r\n");
 
     if (bmpHaveValues)
     {
@@ -1273,6 +1445,7 @@ static void printHelp(void)
               "  set wallsensor 1|0 BMP-Sensor an der Wand nutzen (1) oder nur schaetzen (0)\r\n"
               "  defaults          alle Einstellungen auf Werkseinstellung\r\n"
               "  test schimmel     Schimmel-Warnung ca. 1 min lang vorfuehren\r\n"
+              "  test sturm        Sturmwarnung 1 min lang vorfuehren\r\n"
               "  Einstellungen werden automatisch im Flash gespeichert.\r\n"
               "  dfu               in den USB-Bootloader springen (Firmware-Update)\r\n"
               "  reset             Neustart\r\n");
@@ -1408,6 +1581,12 @@ static void handleCommand(char *line)
     {
         handleSet(args);
     }
+    else if (strcmp(cmd, "test") == 0 && args && strcmp(args, "sturm") == 0)
+    {
+        sturmTest = 1;
+        tSturmTestUntil = HAL_GetTick() + STORM_TEST_MS;
+        Log_Print("Test: Sturm wahrscheinlich fuer 1 min\r\n");
+    }
     else if (strcmp(cmd, "test") == 0 && args && strcmp(args, "schimmel") == 0)
     {
         Schimmel_TestWarning();
@@ -1524,6 +1703,7 @@ void App_Process(void)
     htuMeasure(now);
     updateLueften(now);
     updateSchimmel(now);
+    updateSturm(now);
     animateLeds(now);
 
     if (haveValues && now - tGraph >= GRAPH_INTERVAL_MS)
