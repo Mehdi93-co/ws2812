@@ -10,6 +10,7 @@
 #include "console.h"
 #include "bootloader.h"
 #include "settings.h"
+#include "lueft.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -45,6 +46,8 @@
 // Regenbogen-Lauflicht
 #define RAINBOW_FRAME_MS 30 // Bildwechsel, kleiner = schneller
 #define RAINBOW_STEP 4      // Farbverschiebung pro Bild (0..255 = ein Umlauf)
+#define BREATH_PERIOD_MS 3000 // Lueften laeuft: blaues "Atmen", Dauer eines Atemzugs
+#define DONE_BLINK_MS 500     // Fenster kann zu: gruenes Blinken
 
 // Verlaufsdiagramm: ein Punkt pro Pixelspalte
 #define GRAPH_INTERVAL_MS 10000UL // 128 Punkte x 10 s = ca. 21 min
@@ -137,9 +140,14 @@ static uint32_t tHtu, tHtuRetry;
 static AmpelState ampel = AMPEL_GRUEN;
 static AmpelState ampelShown = (AmpelState)0xFF; // was zuletzt auf den LEDs war
 
-static uint8_t lueften; // Luftfeuchte zu hoch: Regenbogen statt Ampel
 static uint8_t rainbowOffset;
-static uint32_t tRainbow;
+static uint32_t tRainbow; // letztes Bild der Lueft-Animation
+
+// Solange der Lueft-Assistent aktiv ist, gehoeren ihm die LEDs
+static uint8_t lueftOwnsLeds(void)
+{
+    return Lueft_GetState() != LUEFT_AUS;
+}
 
 static float graphData[SH1107_WIDTH];
 static RingBuffer graph = {graphData, SH1107_WIDTH, 0, 0};
@@ -211,8 +219,8 @@ static AmpelState nextAmpelState(AmpelState state, float t)
 static void showAmpel(AmpelState state)
 {
     uint8_t red = 0, green = 0, blue = 0;
-    // Waehrend des Regenbogens gehoeren die LEDs dem Lauflicht
-    if (lueften || state == ampelShown)
+    // Waehrend des Lueftens gehoeren die LEDs dem Lueft-Assistenten
+    if (lueftOwnsLeds() || state == ampelShown)
         return;
     ampelShown = state;
 
@@ -284,26 +292,102 @@ static void drawRainbow(void)
     rainbowOffset += RAINBOW_STEP;
 }
 
-static void updateLueften(void)
+static void drawSolid(uint8_t red, uint8_t green, uint8_t blue)
 {
-    uint8_t before = lueften;
+    for (uint16_t i = 0; i < leds->numLeds; i++)
+    {
+        WS2812_SetColor(leds, i, red, green, blue);
+    }
+    WS2812_Update(leds);
+}
 
+// LED-Animation je nach Zustand: noetig = Regenbogen, laeuft = blau atmend, fertig = gruen blinkend
+static void lueftLeds(uint32_t now)
+{
+    if (!lueftOwnsLeds() || now - tRainbow < RAINBOW_FRAME_MS)
+        return;
+    tRainbow = now;
+
+    switch (Lueft_GetState())
+    {
+    case LUEFT_NOETIG:
+        drawRainbow();
+        break;
+    case LUEFT_LAEUFT:
+    {
+        float phase = (float)(now % BREATH_PERIOD_MS) / BREATH_PERIOD_MS;
+        float level = 0.5f - 0.5f * cosf(6.2831853f * phase); // 0..1..0
+        drawSolid(0, 0, (uint8_t)(40.0f + 215.0f * level));
+        break;
+    }
+    case LUEFT_FERTIG:
+        if ((now / DONE_BLINK_MS) & 1)
+            drawSolid(0, 0, 0);
+        else
+            drawSolid(0, 255, 0);
+        break;
+    default:
+        break;
+    }
+}
+
+// Text fuer die Statuszeile, NULL wenn der Lueft-Assistent nichts zu melden hat
+static const char *lueftStatusText(uint32_t now, char *buf)
+{
+    uint32_t s;
+    switch (Lueft_GetState())
+    {
+    case LUEFT_NOETIG:
+        return "Bitte lueften!";
+    case LUEFT_LAEUFT:
+        s = Lueft_GetDurationS(now);
+        sprintf(buf, "Lueften %02lu:%02lu", (unsigned long)(s / 60), (unsigned long)(s % 60));
+        return buf;
+    case LUEFT_FERTIG:
+        return (Lueft_GetGrund() == LUEFT_GRUND_ZU_KALT) ? "Zu kalt: Fenster zu!" : "Fenster kann zu!";
+    default:
+        return NULL;
+    }
+}
+
+static void updateLueften(uint32_t now)
+{
+    uint8_t changed;
     if (!htuOk || !htuHaveValues)
-        lueften = 0;
-    else if (!lueften && htuHum > cfg.humWet)
-        lueften = 1;
-    else if (lueften && htuHum < cfg.humWet - HUM_HYST)
-        lueften = 0;
-
-    if (lueften == before)
+        changed = Lueft_Reset();
+    else
+        changed = Lueft_Update(now, htuTemp, htuHum, cfg.humWet);
+    if (!changed)
         return;
 
-    Log_Print(lueften ? "Luftfeuchte hoch: bitte lueften!\r\n" : "Luftfeuchte wieder ok\r\n");
-    if (!lueften)
+    switch (Lueft_GetState())
     {
-        // Ampel neu zeichnen, die LEDs zeigen noch den Regenbogen
+    case LUEFT_NOETIG:
+        Log_Print("Luftfeuchte hoch: bitte lueften!\r\n");
+        break;
+    case LUEFT_LAEUFT:
+        Log_Print("Fenster offen erkannt, Lueften laeuft\r\n");
+        break;
+    case LUEFT_FERTIG:
+        switch (Lueft_GetGrund())
+        {
+        case LUEFT_GRUND_FEUCHTE_OK:
+            Log_Print("Luftfeuchte ok: Fenster kann zu\r\n");
+            break;
+        case LUEFT_GRUND_ZU_KALT:
+            Log_Print("Raum zu stark abgekuehlt: Fenster schliessen\r\n");
+            break;
+        default:
+            Log_Print("Genug gelueftet: Fenster kann zu\r\n");
+            break;
+        }
+        break;
+    default:
+        Log_Print("Lueft-Assistent: alles ok\r\n");
+        // Ampel neu zeichnen, die LEDs zeigen noch die Lueft-Animation
         ampelShown = (AmpelState)0xFF;
         showAmpel(ampel);
+        break;
     }
     displayDirty = 1;
 }
@@ -574,7 +658,8 @@ static void drawPageWerte(void)
     sprintf(line, "%s" SH1107_DEG "C", value);
     SH1107_DrawString(0, 37, line, 2);
 
-    SH1107_DrawString(0, 56, lueften ? "Bitte lueften!" : stateText[ampel], 1);
+    const char *lueftText = lueftStatusText(HAL_GetTick(), line);
+    SH1107_DrawString(0, 56, lueftText ? lueftText : stateText[ampel], 1);
 }
 
 static void drawPageSensor2(void)
@@ -670,12 +755,15 @@ static void drawPageFeuchte(void)
     sprintf(line, "Taupunkt: %s" SH1107_DEG "C", value);
     SH1107_DrawString(0, 40, line, 1);
 
+    const char *lueftText = lueftStatusText(HAL_GetTick(), line);
     if (!htuOk)
         SH1107_DrawString(0, 56, "Sensor Fehler!", 1);
+    else if (lueftText)
+        SH1107_DrawString(0, 56, lueftText, 1);
     else if (htuHum < HUM_DRY)
         SH1107_DrawString(0, 56, "Luft: zu trocken", 1);
-    else if (lueften)
-        SH1107_DrawString(0, 56, "Feucht - lueften!", 1);
+    else if (htuHum > cfg.humWet)
+        SH1107_DrawString(0, 56, "Feucht (Pause)", 1); // nach dem Lueften: 15 min Pause
     else
         SH1107_DrawString(0, 56, "Luft: angenehm", 1);
 }
@@ -856,6 +944,8 @@ static void printStatus(void)
     }
 
     Log_Print(htuOk ? "HTU2x OK, Adresse 0x40\r\n" : "HTU2x nicht gefunden (0x40)\r\n");
+    sprintf(line, "Lueft-Assistent: %s\r\n", Lueft_StateName(Lueft_GetState()));
+    Log_Print(line);
     Log_Print(cfgLoaded ? "Einstellungen aus dem Flash geladen\r\n" : "Werkseinstellungen aktiv\r\n");
     Log_Print("'help' zeigt alle Befehle\r\n");
 }
@@ -1065,6 +1155,7 @@ void App_Init(WS2812Controller *ledController, UART_HandleTypeDef *huart)
     Log_Init(huart);
     Console_Init(handleCommand);
     Buttons_Init();
+    Lueft_Init();
 
     // Einstellungen aus dem Flash, bei fehlendem oder ungueltigem Eintrag Werkseinstellung
     cfg = cfgDefaults;
@@ -1131,13 +1222,8 @@ void App_Process(void)
 
     bmpMeasure(now);
     htuMeasure(now);
-    updateLueften();
-
-    if (lueften && now - tRainbow >= RAINBOW_FRAME_MS)
-    {
-        tRainbow = now;
-        drawRainbow();
-    }
+    updateLueften(now);
+    lueftLeds(now);
 
     if (haveValues && now - tGraph >= GRAPH_INTERVAL_MS)
     {

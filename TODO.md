@@ -38,8 +38,8 @@ Hardware: Adafruit Feather STM32F405, OLED FeatherWing 128x64 (SH1107), LPS22, H
 - [ ] Druck-Verlauf über 24 Stunden als Diagramm
 
 ### Lüften
-- [ ] Lüft-Assistent: erkennen, ob die Feuchte nach dem Lüften fällt, und „Fenster kann zu“ melden
-- [ ] Anzeige, wie lange schon gelüftet wird
+- [x] Lüft-Assistent: Fenster offen erkennen, „Fenster kann zu“ melden, 15 min Pause danach
+- [x] Anzeige, wie lange schon gelüftet wird
 - [ ] Schimmelrisiko aus Temperatur, Feuchte und Taupunkt berechnen und warnen
 
 ### Wetter
