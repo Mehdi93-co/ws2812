@@ -6,7 +6,7 @@
 #include <string.h>
 #include <stdio.h>
 
-#define Debug_Mode
+// #define Debug_Mode // aktivieren fuer UART-Ausgabe der LED-Daten (sehr langsam)
 #define NUM_LEDS 12
 #define HIGH_BIT 61
 #define LOW_BIT 31

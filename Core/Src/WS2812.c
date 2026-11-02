@@ -8,11 +8,11 @@ void calculatePulseWidth(uint8_t value, uint16_t *pulseWith)
 {
     if (value)
     {
-        pulseWith = HIGH_BIT; // Adjust based on your timing requirements
+        *pulseWith = HIGH_BIT; // Adjust based on your timing requirements
     }
     else
     {
-        pulseWith = LOW_BIT; // Adjust based on your timing requirements
+        *pulseWith = LOW_BIT; // Adjust based on your timing requirements
     }
 }
 
@@ -23,7 +23,8 @@ void WS2812_Init(WS2812Controller *controller, TIM_HandleTypeDef *htim, UART_Han
     controller->huart = huart;
     controller->htim = htim;
     controller->channel = channel;
-    controller->numLeds = numLeds;
+    controller->numLeds = (numLeds > NUM_LEDS) ? NUM_LEDS : numLeds; // ledData hat nur Platz fuer NUM_LEDS
+    controller->brightness = 255;
     for (uint16_t i = 0; i < controller->numLeds * 3; i++)
     {
         controller->ledData[i] = 0;
@@ -50,27 +51,23 @@ void WS2812_SetColor(WS2812Controller *controller, uint16_t index, uint8_t red, 
         red = gammaCorrect(red);
         green = gammaCorrect(green);
         blue = gammaCorrect(blue);
-
-        red = (red > 255) ? 255 : ((red < 0) ? 0 : red);
-        green = (green > 255) ? 255 : ((green < 0) ? 0 : green);
-        blue = (blue > 255) ? 255 : ((blue < 0) ? 0 : blue);
 #ifdef Debug_Mode
-        sprintf(str, "\tRED   [%ld]\r\n", red);
+        sprintf(str, "\tRED   [%u]\r\n", red);
         HAL_UART_Transmit(controller->huart, (uint8_t *)str, strlen(str), 100);
-        sprintf(str, "\tGREEN [%ld]\r\n", green);
+        sprintf(str, "\tGREEN [%u]\r\n", green);
         HAL_UART_Transmit(controller->huart, (uint8_t *)str, strlen(str), 100);
-        sprintf(str, "\tBLUE  [%ld]\r\n", blue);
+        sprintf(str, "\tBLUE  [%u]\r\n", blue);
         HAL_UART_Transmit(controller->huart, (uint8_t *)str, strlen(str), 100);
 #endif
         controller->ledData[index * 3] = green;
         controller->ledData[index * 3 + 1] = red;
         controller->ledData[index * 3 + 2] = blue;
 #ifdef Debug_Mode
-        sprintf(str, "\tred   [%ld]\r\n", controller->ledData[index * 3 + 1]);
+        sprintf(str, "\tred   [%u]\r\n", controller->ledData[index * 3 + 1]);
         HAL_UART_Transmit(controller->huart, (uint8_t *)str, strlen(str), 100);
-        sprintf(str, "\tgreen [%ld]\r\n", controller->ledData[index * 3]);
+        sprintf(str, "\tgreen [%u]\r\n", controller->ledData[index * 3]);
         HAL_UART_Transmit(controller->huart, (uint8_t *)str, strlen(str), 100);
-        sprintf(str, "\tblue  [%ld]\r\n", controller->ledData[index * 3 + 2]);
+        sprintf(str, "\tblue  [%u]\r\n", controller->ledData[index * 3 + 2]);
         HAL_UART_Transmit(controller->huart, (uint8_t *)str, strlen(str), 100);
 #endif
     }
@@ -89,7 +86,17 @@ void WS2812_Update(WS2812Controller *controller)
     // Debug string
     char str[50];
 
-    uint16_t pwmData[(controller->numLeds * 24) + DELAY]; // 222 bits 24 bit/LED
+    // static: die DMA liest den Puffer noch, nachdem die Funktion zurueckgekehrt ist
+    static uint16_t pwmData[(NUM_LEDS * 24) + DELAY]; // 24 bit/LED + Reset-Pause
+
+    // Warten, bis der vorherige DMA-Transfer fertig ist, bevor der Puffer ueberschrieben wird
+    uint32_t start = HAL_GetTick();
+    while (HAL_TIM_GetChannelState(controller->htim, controller->channel) != HAL_TIM_CHANNEL_STATE_READY)
+    {
+        if (HAL_GetTick() - start > 100)
+            return;
+    }
+
     // Convert RGB data to PWM data
     for (uint16_t index = 0; index < ((controller->numLeds * 24) + DELAY); index++)
     {
@@ -98,7 +105,6 @@ void WS2812_Update(WS2812Controller *controller)
 
     uint32_t pwmIndex = 0;
     uint32_t color = 0;
-    uint16_t pulseWith = 0;
     for (uint16_t i = 0; i < (controller->numLeds); i++)
     {
         // Extract RGB values
@@ -125,30 +131,26 @@ void WS2812_Update(WS2812Controller *controller)
         pwmData[pwmIndex++] = 0;
     }
 #ifdef Debug_Mode
-    for (uint16_t i = 0; i < (controller->numLeds * 24) + (60); i++)
+    for (uint16_t i = 0; i < pwmIndex; i++)
     {
-        sprintf(str, "pwmData[%d] = %d\r\n", i, pwmData[i]);
+        sprintf(str, "pwmData[%u] = %u\r\n", i, pwmData[i]);
         HAL_UART_Transmit(controller->huart, (uint8_t *)str, strlen(str), 100);
     }
 #endif
 
-    HAL_StatusTypeDef status = HAL_TIM_PWM_Start_DMA(controller->htim, TIM_CHANNEL_1, (uint32_t *)pwmData, 320);
-
-    while (status != HAL_OK)
+    if (HAL_TIM_PWM_Start_DMA(controller->htim, controller->channel, (uint32_t *)pwmData, pwmIndex) != HAL_OK)
     {
-        // Hier ggf. eine Wartezeit einfügen, um eine Endlosschleife zu verhindern
-        HAL_Delay(100);
-        // Erneut versuchen, DMA zu starten
-        status = HAL_TIM_PWM_Start_DMA(controller->htim, TIM_CHANNEL_1, (uint32_t *)pwmData, pwmIndex);
+        sprintf(str, "WS2812_Update: DMA start failed\r\n");
+        HAL_UART_Transmit(controller->huart, (uint8_t *)str, strlen(str), 100);
     }
 }
 
 void WS2812_Reset(WS2812Controller *controller)
 {
     // Debug string
-    char str[12];
+    char str[32];
     WS2812_SetBrightness(controller, 1);
-    for (uint8_t i = 0; i < (controller->numLeds); ++i)
+    for (uint16_t i = 0; i < (controller->numLeds); ++i)
     {
         sprintf(str, "Reset LED [%u]\r\n", i);
         HAL_UART_Transmit(controller->huart, (uint8_t *)str, strlen(str), 100);
@@ -164,7 +166,7 @@ void WS2812_Deinit(WS2812Controller *controller)
 void WS2812_Print(WS2812Controller *controller)
 {
     char str[80];
-    sprintf(str, "Channel: %ld\r\n", controller->channel);
+    sprintf(str, "Channel: %lu\r\n", controller->channel);
     HAL_UART_Transmit(controller->huart, (uint8_t *)str, strlen(str), 100);
     sprintf(str, "numLeds: %d\r\n", controller->numLeds);
     HAL_UART_Transmit(controller->huart, (uint8_t *)str, strlen(str), 100);
@@ -175,7 +177,7 @@ void WS2812_Print(WS2812Controller *controller)
         sprintf(str, "[%d] ", controller->ledData[i]);
         HAL_UART_Transmit(controller->huart, (uint8_t *)str, strlen(str), 100);
     }
-    HAL_UART_Transmit(controller->huart, "\r\n", strlen("\r\n"), 100);
+    HAL_UART_Transmit(controller->huart, (uint8_t *)"\r\n", 2, 100);
 }
 
 void UART_NewLine(WS2812Controller *controller)

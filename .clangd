@@ -1,0 +1,4 @@
+CompileFlags:
+  CompilationDatabase: build/debug/build
+  Add:
+    - --target=arm-none-eabi

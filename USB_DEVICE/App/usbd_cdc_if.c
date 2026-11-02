@@ -22,7 +22,7 @@
 #include "usbd_cdc_if.h"
 
 /* USER CODE BEGIN INCLUDE */
-
+#include "log.h"
 /* USER CODE END INCLUDE */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -241,7 +241,8 @@ static int8_t CDC_Control_FS(uint8_t cmd, uint8_t* pbuf, uint16_t length)
        break;
 
     case CDC_SET_CONTROL_LINE_STATE:
-
+      /* pbuf zeigt hier auf den Setup-Request, Bit 0 von wValue = DTR (Terminal offen) */
+      Log_SetDtr((((USBD_SetupReqTypedef *)pbuf)->wValue & 0x01U) != 0U);
     break;
 
     case CDC_SEND_BREAK:
