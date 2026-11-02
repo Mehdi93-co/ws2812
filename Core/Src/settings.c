@@ -15,7 +15,7 @@ typedef struct
 {
     uint32_t magic;
     uint16_t version;
-    uint16_t reserved0;
+    int16_t wallDeltaTenths; // ab FLAG_WALL, Zehntel Grad C, vorher reserviert (0)
     float tempLow;
     float tempHigh;
     float humWet;
@@ -30,6 +30,7 @@ typedef struct
 // Neue Felder werden ueber Flags markiert statt SETTINGS_VERSION zu erhoehen,
 // so bleiben aeltere Eintraege (mit 0 in den reservierten Bytes) weiter lesbar
 #define FLAG_SCREENSAVER 0x00000001UL
+#define FLAG_WALL 0x00000002UL
 
 _Static_assert(sizeof(Record) == 32, "Record muss 32 Byte gross sein");
 
@@ -144,6 +145,8 @@ uint8_t Settings_Load(Settings *s)
         s->dimMinutes = r->dimMinutes;
         s->offMinutes = r->offMinutes;
     }
+    if (r->flags & FLAG_WALL)
+        s->wallDelta = r->wallDeltaTenths / 10.0f;
     return 1;
 }
 
@@ -160,7 +163,8 @@ HAL_StatusTypeDef Settings_Save(const Settings *s)
     rec.page = s->page;
     rec.dimMinutes = s->dimMinutes;
     rec.offMinutes = s->offMinutes;
-    rec.flags = FLAG_SCREENSAVER;
+    rec.wallDeltaTenths = (int16_t)(s->wallDelta * 10.0f + (s->wallDelta >= 0.0f ? 0.5f : -0.5f));
+    rec.flags = FLAG_SCREENSAVER | FLAG_WALL;
     rec.crc = crc32((const uint8_t *)&rec, offsetof(Record, crc));
 
     int32_t last;

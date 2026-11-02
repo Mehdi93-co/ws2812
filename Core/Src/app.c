@@ -11,6 +11,7 @@
 #include "bootloader.h"
 #include "settings.h"
 #include "lueft.h"
+#include "schimmel.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,6 +36,10 @@
 // Bildschirmschoner (schuetzt das OLED vor dem Einbrennen), Zeiten per "set dim/off" aenderbar
 #define SAVER_DIM_MIN_DEFAULT 2  // nach 2 min ohne Tastendruck dimmen
 #define SAVER_OFF_MIN_DEFAULT 10 // nach 10 min ausschalten
+
+// Schimmelrisiko: angenommene Abkuehlung der Wand gegenueber der Raumluft, per "set wall" aenderbar.
+// Typisch: Aussenwand im Winter 3-5 C, schlecht gedaemmt bis 8 C, Innenwand/Sommer 0-1 C
+#define WALL_DELTA_DEFAULT 4.0f
 #define DISPLAY_DIM_CONTRAST 0x05
 #define PRINT_INTERVAL_MS 1000
 #define BUTTON_INTERVAL_MS 10
@@ -111,6 +116,7 @@ static const Settings cfgDefaults = {
     .page = 0,
     .dimMinutes = SAVER_DIM_MIN_DEFAULT,
     .offMinutes = SAVER_OFF_MIN_DEFAULT,
+    .wallDelta = WALL_DELTA_DEFAULT,
 };
 static Settings cfg;
 static uint8_t cfgDirty;  // geaendert, aber noch nicht gespeichert
@@ -482,6 +488,49 @@ static void updateLueften(uint32_t now)
     displayDirty = 1;
 }
 
+/* ---------- Schimmelrisiko ---------- */
+// Zeile fuer das Display, max. 21 Zeichen
+static void schimmelText(char *out)
+{
+    uint16_t minutes = Schimmel_GetCriticalMinutes();
+    char duration[12];
+
+    if (minutes >= 60)
+        sprintf(duration, "%uh", minutes / 60);
+    else
+        sprintf(duration, "%umin", minutes);
+
+    if (Schimmel_IsWarning())
+        sprintf(out, "Schimmel-WARNUNG %s", duration);
+    else if (Schimmel_GetLevel() == SCHIMMEL_KONDENSAT)
+        strcpy(out, "Schimmel: Kondensat!");
+    else if (Schimmel_GetLevel() == SCHIMMEL_HOCH)
+        sprintf(out, "Schimmel: hoch %s", duration);
+    else
+        sprintf(out, "Schimmel: %s", Schimmel_LevelName(Schimmel_GetLevel()));
+}
+
+static void updateSchimmel(uint32_t now)
+{
+    // Ohne Feuchtesensor nichts bewerten, die 24-h-Historie bleibt fuer kurze Ausfaelle erhalten
+    if (!htuOk || !htuHaveValues)
+        return;
+
+    if (Schimmel_Update(now, htuTemp, htuHum, cfg.wallDelta))
+    {
+        if (Schimmel_IsWarning())
+        {
+            Log_Print("Schimmel-Warnung: Wand war lange zu feucht, oefter lueften und heizen!\r\n");
+            wakeDisplay();
+        }
+        else
+        {
+            Log_Print("Schimmel-Warnung beendet\r\n");
+        }
+        displayDirty = 1;
+    }
+}
+
 /* ---------- Wettertrend ---------- */
 static Trend getTrend(void)
 {
@@ -842,11 +891,14 @@ static void drawPageFeuchte(void)
 
     formatFixed1(value, htuTemp);
     sprintf(line, "Temp: %s" SH1107_DEG "C", value);
-    SH1107_DrawString(0, 30, line, 1);
+    SH1107_DrawString(0, 28, line, 1);
 
     formatFixed1(value, dewPoint(htuTemp, htuHum));
     sprintf(line, "Taupunkt: %s" SH1107_DEG "C", value);
-    SH1107_DrawString(0, 40, line, 1);
+    SH1107_DrawString(0, 37, line, 1);
+
+    schimmelText(line);
+    SH1107_DrawString(0, 46, line, 1);
 
     const char *lueftText = lueftStatusText(HAL_GetTick(), line);
     if (!htuOk)
@@ -1003,6 +1055,12 @@ static void printValues(void)
         formatFixed1(h, htuHum);
         sprintf(line, "HTU2x: Temp: %s C, Feuchte: %s %%rH%s\r\n", t, h, htuOk ? "" : " (Sensor Fehler)");
         Log_Print(line);
+
+        formatFixed1(h, Schimmel_GetWallHumidity());
+        sprintf(line, "Wand: Feuchte %s %%rH, Schimmelrisiko %s, kritisch %u min/24h%s\r\n", h,
+                Schimmel_LevelName(Schimmel_GetLevel()), Schimmel_GetCriticalMinutes(),
+                Schimmel_IsWarning() ? " WARNUNG" : "");
+        Log_Print(line);
     }
 }
 
@@ -1066,6 +1124,9 @@ static void printSettings(void)
     else
         strcpy(line, "nicht ausschalten\r\n");
     Log_Print(line);
+    formatFixed1(a, cfg.wallDelta);
+    sprintf(line, "Schimmelrisiko: Wand %s C kaelter als die Raumluft\r\n", a);
+    Log_Print(line);
     sprintf(line, "Display jetzt: %s, letzter Tastendruck vor %lu s\r\n", saverName(),
             (unsigned long)((HAL_GetTick() - tActivity) / 1000UL));
     Log_Print(line);
@@ -1086,7 +1147,8 @@ static uint8_t cfgValid(const Settings *s)
     return s->tempLow >= -40.0f && s->tempLow <= 85.0f &&
            s->tempHigh >= -40.0f && s->tempHigh <= 85.0f && s->tempLow < s->tempHigh &&
            s->humWet > HUM_HYST && s->humWet <= 100.0f &&
-           s->page < PAGE_COUNT;
+           s->page < PAGE_COUNT &&
+           s->wallDelta >= 0.0f && s->wallDelta <= 15.0f;
 }
 
 static void saveCfgNow(void)
@@ -1120,6 +1182,7 @@ static void printHelp(void)
               "  set bright <0-255> LED-Helligkeit\r\n"
               "  set dim <min>     Display dimmen nach x min ohne Tastendruck (0 = nie)\r\n"
               "  set off <min>     Display aus nach x min ohne Tastendruck (0 = nie)\r\n"
+              "  set wall <C>      Schimmelrisiko: Wand so viel kaelter als die Raumluft (0-15)\r\n"
               "  defaults          alle Einstellungen auf Werkseinstellung\r\n"
               "  Einstellungen werden automatisch im Flash gespeichert.\r\n"
               "  dfu               in den USB-Bootloader springen (Firmware-Update)\r\n"
@@ -1152,7 +1215,7 @@ static void handleSet(char *args)
 
     if (name == NULL || !parseFloat(valueStr, &value))
     {
-        Log_Print("Verwendung: set low|high|wet|bright|dim|off <wert>\r\n");
+        Log_Print("Verwendung: set low|high|wet|bright|dim|off|wall <wert>\r\n");
         return;
     }
 
@@ -1206,9 +1269,18 @@ static void handleSet(char *args)
             cfg.offMinutes = (uint8_t)value;
         wakeDisplay(); // neue Zeiten gelten ab jetzt
     }
+    else if (strcmp(name, "wall") == 0)
+    {
+        if (value < 0.0f || value > 15.0f)
+        {
+            Log_Print("Fehler: wall muss zwischen 0 und 15 liegen\r\n");
+            return;
+        }
+        cfg.wallDelta = value;
+    }
     else
     {
-        Log_Print("Unbekannter Wert, erlaubt: low, high, wet, bright, dim, off\r\n");
+        Log_Print("Unbekannter Wert, erlaubt: low, high, wet, bright, dim, off, wall\r\n");
         return;
     }
 
@@ -1277,6 +1349,7 @@ void App_Init(WS2812Controller *ledController, UART_HandleTypeDef *huart)
     Console_Init(handleCommand);
     Buttons_Init();
     Lueft_Init();
+    Schimmel_Init();
 
     // Einstellungen aus dem Flash, bei fehlendem oder ungueltigem Eintrag Werkseinstellung
     cfg = cfgDefaults;
@@ -1345,6 +1418,7 @@ void App_Process(void)
     bmpMeasure(now);
     htuMeasure(now);
     updateLueften(now);
+    updateSchimmel(now);
     lueftLeds(now);
 
     if (haveValues && now - tGraph >= GRAPH_INTERVAL_MS)

@@ -16,6 +16,7 @@ typedef struct
     uint8_t page;       // zuletzt gewaehlte Display-Seite
     uint8_t dimMinutes; // Bildschirmschoner: dimmen nach x min ohne Tastendruck (0 = nie)
     uint8_t offMinutes; // Bildschirmschoner: aus nach x min ohne Tastendruck (0 = nie)
+    float wallDelta;    // Schimmelrisiko: so viel kaelter als die Raumluft ist die Wand (Grad C)
 } Settings;
 
 // Laedt den letzten gueltigen Eintrag. Gibt 0 zurueck (und laesst *s unveraendert), wenn keiner existiert.
