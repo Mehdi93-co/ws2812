@@ -7,14 +7,17 @@
 #include "sh1107.h"
 #include "buttons.h"
 #include "log.h"
+#include "console.h"
+#include "bootloader.h"
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ---------- Einstellungen ---------- */
 // Temperatur-Ampel in Grad C
-#define TEMP_LOW 18.0f
-#define TEMP_HIGH 26.0f
+#define TEMP_LOW_DEFAULT 18.0f
+#define TEMP_HIGH_DEFAULT 26.0f
 #define TEMP_HYST 0.5f // Hysterese, damit die Ampel an der Grenze nicht flackert
 
 #define FILTER_ALPHA 0.2f // Glaettung 0..1, kleiner = ruhiger, aber traeger
@@ -32,8 +35,8 @@
 
 // Bewertung der Luftfeuchte in %rH
 #define HUM_DRY 30.0f
-#define HUM_WET 60.0f // darueber: Lueften-Anzeige (Regenbogen-Lauflicht)
-#define HUM_HYST 2.0f // Regenbogen geht erst unter HUM_WET - HUM_HYST wieder aus
+#define HUM_WET_DEFAULT 60.0f // darueber: Lueften-Anzeige (Regenbogen-Lauflicht)
+#define HUM_HYST 2.0f // Regenbogen geht erst unter humWet - HUM_HYST wieder aus
 
 // Regenbogen-Lauflicht
 #define RAINBOW_FRAME_MS 30 // Bildwechsel, kleiner = schneller
@@ -86,6 +89,11 @@ typedef struct
 /* ---------- Zustand ---------- */
 static WS2812Controller *leds;
 static LPS22_Handle lps22;
+
+// Schwellwerte, per USB-Befehl "set" aenderbar (noch nicht im Flash gespeichert)
+static float tempLow = TEMP_LOW_DEFAULT;
+static float tempHigh = TEMP_HIGH_DEFAULT;
+static float humWet = HUM_WET_DEFAULT;
 
 static uint8_t displayOk;
 static uint8_t displayOn = 1;
@@ -164,18 +172,18 @@ static void resetMinMax(void)
 static AmpelState nextAmpelState(AmpelState state, float t)
 {
     // Aus Rot/Gelb erst zurueck, wenn die Grenze um TEMP_HYST unterschritten ist
-    if (state == AMPEL_ROT && t < TEMP_HIGH - TEMP_HYST)
+    if (state == AMPEL_ROT && t < tempHigh - TEMP_HYST)
         state = AMPEL_GRUEN;
-    else if (state == AMPEL_GELB && t > TEMP_LOW + TEMP_HYST)
+    else if (state == AMPEL_GELB && t > tempLow + TEMP_HYST)
         state = AMPEL_GRUEN;
     else if (state == AMPEL_FEHLER)
         state = AMPEL_GRUEN;
 
     if (state == AMPEL_GRUEN)
     {
-        if (t >= TEMP_HIGH)
+        if (t >= tempHigh)
             state = AMPEL_ROT;
-        else if (t <= TEMP_LOW)
+        else if (t <= tempLow)
             state = AMPEL_GELB;
     }
     return state;
@@ -263,9 +271,9 @@ static void updateLueften(void)
 
     if (!htuOk || !htuHaveValues)
         lueften = 0;
-    else if (!lueften && htuHum > HUM_WET)
+    else if (!lueften && htuHum > humWet)
         lueften = 1;
-    else if (lueften && htuHum < HUM_WET - HUM_HYST)
+    else if (lueften && htuHum < humWet - HUM_HYST)
         lueften = 0;
 
     if (lueften == before)
@@ -824,6 +832,144 @@ static void printStatus(void)
     }
 
     Log_Print(htuOk ? "HTU2x OK, Adresse 0x40\r\n" : "HTU2x nicht gefunden (0x40)\r\n");
+    Log_Print("'help' zeigt alle Befehle\r\n");
+}
+
+/* ---------- USB-Befehle ---------- */
+static void printSettings(void)
+{
+    char line[64], a[16], b[16];
+    formatFixed1(a, tempLow);
+    formatFixed1(b, tempHigh);
+    sprintf(line, "Ampel: gelb <= %s C, rot >= %s C\r\n", a, b);
+    Log_Print(line);
+    formatFixed1(a, humWet);
+    sprintf(line, "Lueften ab %s %%rH\r\n", a);
+    Log_Print(line);
+}
+
+static void printHelp(void)
+{
+    Log_Print("Befehle:\r\n"
+              "  help              diese Hilfe\r\n"
+              "  status            Sensoren und Einstellungen anzeigen\r\n"
+              "  set low <C>       Ampel gelb ab dieser Temperatur (und darunter)\r\n"
+              "  set high <C>      Ampel rot ab dieser Temperatur\r\n"
+              "  set wet <%>       Regenbogen/Lueften ab dieser Luftfeuchte\r\n"
+              "  dfu               in den USB-Bootloader springen (Firmware-Update)\r\n"
+              "  reset             Neustart\r\n");
+}
+
+// Wartet kurz, damit eine letzte Meldung noch per USB rausgeht
+static void flushLog(uint32_t ms)
+{
+    uint32_t start = HAL_GetTick();
+    while (HAL_GetTick() - start < ms)
+        Log_Process();
+}
+
+// Liest eine Zahl, gibt 0 zurueck, wenn keine gueltige Zahl folgt
+static uint8_t parseFloat(const char *str, float *value)
+{
+    char *end;
+    if (str == NULL)
+        return 0;
+    *value = strtof(str, &end);
+    return end != str;
+}
+
+static void handleSet(char *args)
+{
+    char *name = strtok(args, " ");
+    char *valueStr = strtok(NULL, " ");
+    float value;
+
+    if (name == NULL || !parseFloat(valueStr, &value))
+    {
+        Log_Print("Verwendung: set low|high|wet <wert>\r\n");
+        return;
+    }
+
+    if (strcmp(name, "low") == 0)
+    {
+        if (value >= tempHigh)
+        {
+            Log_Print("Fehler: low muss kleiner als high sein\r\n");
+            return;
+        }
+        tempLow = value;
+    }
+    else if (strcmp(name, "high") == 0)
+    {
+        if (value <= tempLow)
+        {
+            Log_Print("Fehler: high muss groesser als low sein\r\n");
+            return;
+        }
+        tempHigh = value;
+    }
+    else if (strcmp(name, "wet") == 0)
+    {
+        if (value <= HUM_HYST || value > 100.0f)
+        {
+            Log_Print("Fehler: wet muss zwischen 3 und 100 liegen\r\n");
+            return;
+        }
+        humWet = value;
+    }
+    else
+    {
+        Log_Print("Unbekannter Wert, erlaubt: low, high, wet\r\n");
+        return;
+    }
+
+    // Ampel mit den neuen Grenzen neu bewerten
+    if (haveValues && sensorOk)
+    {
+        ampel = nextAmpelState(AMPEL_GRUEN, temperature);
+        showAmpel(ampel);
+    }
+    displayDirty = 1;
+    printSettings();
+}
+
+static void handleCommand(char *line)
+{
+    char *cmd = strtok(line, " ");
+    char *args = strtok(NULL, "");
+
+    if (cmd == NULL)
+        return;
+
+    if (strcmp(cmd, "help") == 0 || strcmp(cmd, "?") == 0)
+    {
+        printHelp();
+    }
+    else if (strcmp(cmd, "status") == 0)
+    {
+        printStatus();
+        printSettings();
+    }
+    else if (strcmp(cmd, "set") == 0)
+    {
+        handleSet(args);
+    }
+    else if (strcmp(cmd, "dfu") == 0)
+    {
+        Log_Print("Springe in den DFU-Bootloader, jetzt flash_dfu.bat starten...\r\n");
+        flushLog(200);
+        Bootloader_Request();
+    }
+    else if (strcmp(cmd, "reset") == 0)
+    {
+        Log_Print("Neustart...\r\n");
+        flushLog(200);
+        NVIC_SystemReset();
+    }
+    else
+    {
+        Log_Print("Unbekannter Befehl, 'help' zeigt alle Befehle\r\n");
+    }
 }
 
 /* ---------- Oeffentliche Funktionen ---------- */
@@ -831,6 +977,7 @@ void App_Init(WS2812Controller *ledController, UART_HandleTypeDef *huart)
 {
     leds = ledController;
     Log_Init(huart);
+    Console_Init(handleCommand);
     Buttons_Init();
 
     // Das OLED braucht nach dem Einschalten Zeit, sonst ignoriert es die Init-Befehle
@@ -915,6 +1062,7 @@ void App_Process(void)
         tPrint = now;
         printValues();
     }
+    Console_Process();
     Log_Process();
 
     if (!displayOk)

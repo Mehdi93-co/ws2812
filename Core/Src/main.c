@@ -28,6 +28,7 @@
 #include "usbd_cdc_if.h"
 #include "i2c_bus.h"
 #include "app.h"
+#include "bootloader.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -91,6 +92,9 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
+  // Muss vor jeder Initialisierung stehen: springt bei Bedarf in den USB-DFU-Bootloader
+  Bootloader_CheckAndJump();
+
   uint8_t brightness = 128;
 
   char tx_begin[] = "/* ========== main begin  ========== */\r\n";
