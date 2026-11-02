@@ -14,9 +14,12 @@ typedef struct
     float humWet;       // Regenbogen / Lueften ab dieser Luftfeuchte
     uint8_t brightness; // LED-Helligkeit 0..255
     uint8_t page;       // zuletzt gewaehlte Display-Seite
+    uint8_t dimMinutes; // Bildschirmschoner: dimmen nach x min ohne Tastendruck (0 = nie)
+    uint8_t offMinutes; // Bildschirmschoner: aus nach x min ohne Tastendruck (0 = nie)
 } Settings;
 
 // Laedt den letzten gueltigen Eintrag. Gibt 0 zurueck (und laesst *s unveraendert), wenn keiner existiert.
+// Felder, die ein aelterer Eintrag noch nicht kennt, behalten ihren Wert in *s.
 uint8_t Settings_Load(Settings *s);
 HAL_StatusTypeDef Settings_Save(const Settings *s);
 

@@ -129,7 +129,7 @@ HAL_StatusTypeDef SH1107_Init(I2C_HandleTypeDef *hi2c)
         0xAE,       // Display aus
         0xD5, 0x51, // Taktteiler
         0x20,       // Page-Adressierung
-        0x81, 0x4F, // Kontrast
+        0x81, SH1107_CONTRAST_NORMAL, // Kontrast
         0xAD, 0x8A, // DC-DC an
         0xA0,       // Segment-Remap normal
         0xC0,       // COM-Scan aufsteigend
@@ -165,6 +165,12 @@ HAL_StatusTypeDef SH1107_SelfTest(uint32_t durationMs)
         return HAL_ERROR;
     HAL_Delay(durationMs);
     return sendCommands(&normal, 1);
+}
+
+HAL_StatusTypeDef SH1107_SetContrast(uint8_t contrast)
+{
+    const uint8_t cmd[] = {0x81, contrast};
+    return sendCommands(cmd, sizeof(cmd));
 }
 
 HAL_StatusTypeDef SH1107_SetDisplayOn(uint8_t on)

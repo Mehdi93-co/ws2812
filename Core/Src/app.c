@@ -31,6 +31,11 @@
 #define DISPLAY_INTERVAL_MS 500
 #define DISPLAY_POWERUP_MS 250 // Wartezeit nach dem Einschalten, wie in den Adafruit-Beispielen
 #define DISPLAY_SELFTEST 1     // 1 = Testbild beim Start (zur Fehlersuche)
+
+// Bildschirmschoner (schuetzt das OLED vor dem Einbrennen), Zeiten per "set dim/off" aenderbar
+#define SAVER_DIM_MIN_DEFAULT 2  // nach 2 min ohne Tastendruck dimmen
+#define SAVER_OFF_MIN_DEFAULT 10 // nach 10 min ausschalten
+#define DISPLAY_DIM_CONTRAST 0x05
 #define PRINT_INTERVAL_MS 1000
 #define BUTTON_INTERVAL_MS 10
 #define SENSOR_RETRY_MS 2000
@@ -104,6 +109,8 @@ static const Settings cfgDefaults = {
     .humWet = HUM_WET_DEFAULT,
     .brightness = BRIGHTNESS_DEFAULT,
     .page = 0,
+    .dimMinutes = SAVER_DIM_MIN_DEFAULT,
+    .offMinutes = SAVER_OFF_MIN_DEFAULT,
 };
 static Settings cfg;
 static uint8_t cfgDirty;  // geaendert, aber noch nicht gespeichert
@@ -163,6 +170,86 @@ static void markCfgChanged(void)
 {
     cfgDirty = 1;
     tCfgChanged = HAL_GetTick();
+}
+
+/* ---------- Bildschirmschoner ---------- */
+typedef enum
+{
+    SAVER_AKTIV,   // normale Helligkeit
+    SAVER_GEDIMMT, // dunkel, aber ablesbar
+    SAVER_AUS      // Display aus
+} SaverState;
+
+static SaverState saver = SAVER_AKTIV;
+static uint32_t tActivity; // letzter Tastendruck oder wichtiges Ereignis
+
+// Sichtbar = nicht per Taster C ausgeschaltet und nicht vom Bildschirmschoner abgeschaltet
+static uint8_t displayVisible(void)
+{
+    return displayOn && saver != SAVER_AUS;
+}
+
+static void applyDisplayPower(void)
+{
+    if (!displayOk)
+        return;
+    SH1107_SetContrast(saver == SAVER_GEDIMMT ? DISPLAY_DIM_CONTRAST : SH1107_CONTRAST_NORMAL);
+    SH1107_SetDisplayOn(displayVisible());
+}
+
+// Taster oder wichtiges Ereignis: Bildschirmschoner beenden
+static void wakeDisplay(void)
+{
+    tActivity = HAL_GetTick();
+    if (saver == SAVER_AKTIV)
+        return;
+    saver = SAVER_AKTIV;
+    applyDisplayPower();
+    displayDirty = 1;
+    Log_Print("Bildschirmschoner: Display aufgeweckt\r\n");
+}
+
+static void updateScreensaver(uint32_t now)
+{
+    // Waehrend gelueftet wird (Timer) und bei "Fenster kann zu" wach bleiben. Diese Zustaende dauern
+    // nur wenige Minuten. "Bitte lueften" weckt nur einmal, sonst wuerde das Display bei
+    // dauerhaft hoher Feuchte nie geschont (der Regenbogen zeigt die Aufforderung ja weiter an).
+    LueftState lueftState = Lueft_GetState();
+    if (lueftState == LUEFT_LAEUFT || lueftState == LUEFT_FERTIG)
+        tActivity = now;
+
+    uint32_t idleMinutes = (now - tActivity) / 60000UL;
+    SaverState wanted = SAVER_AKTIV;
+
+    if (cfg.offMinutes && idleMinutes >= cfg.offMinutes)
+        wanted = SAVER_AUS;
+    else if (cfg.dimMinutes && idleMinutes >= cfg.dimMinutes)
+        wanted = SAVER_GEDIMMT;
+
+    if (wanted == saver)
+        return;
+    saver = wanted;
+    applyDisplayPower();
+    displayDirty = 1;
+    if (saver == SAVER_AUS)
+        Log_Print("Bildschirmschoner: Display aus\r\n");
+    else if (saver == SAVER_GEDIMMT)
+        Log_Print("Bildschirmschoner: Display gedimmt\r\n");
+    else
+        Log_Print("Bildschirmschoner: Display normal\r\n");
+}
+
+static const char *saverName(void)
+{
+    switch (saver)
+    {
+    case SAVER_GEDIMMT:
+        return "gedimmt";
+    case SAVER_AUS:
+        return "aus";
+    default:
+        return "normal";
+    }
 }
 
 // Float mit einer Nachkommastelle formatieren (nano-libc kann ohne Zusatzflag kein %f)
@@ -389,6 +476,9 @@ static void updateLueften(uint32_t now)
         showAmpel(ampel);
         break;
     }
+    // Hinweise zum Lueften sollen sichtbar sein, auch wenn der Bildschirmschoner aktiv ist
+    if (Lueft_GetState() != LUEFT_AUS)
+        wakeDisplay();
     displayDirty = 1;
 }
 
@@ -415,6 +505,7 @@ static void sensorLost(void)
 {
     sensorOk = 0;
     Log_Print("LPS22 verloren, I2C wird neu gestartet\r\n");
+    wakeDisplay(); // Fehler soll sichtbar sein
     // Haengt der Bus, hilft oft nur ein Neustart der I2C-Peripherie
     HAL_I2C_DeInit(&hi2c1);
     I2C_Bus_Init();
@@ -592,11 +683,13 @@ static void handleButtons(uint8_t pressed)
     if (!pressed)
         return;
 
-    // Ist das Display aus, schaltet jeder Taster es nur wieder ein
-    if (!displayOn)
+    // Ist das Display aus oder gedimmt, weckt der erste Druck es nur auf (blaettert nicht)
+    uint8_t wasSleeping = (saver != SAVER_AKTIV) || !displayOn;
+    wakeDisplay();
+    if (wasSleeping)
     {
         displayOn = 1;
-        SH1107_SetDisplayOn(1);
+        applyDisplayPower();
         displayDirty = 1;
         return;
     }
@@ -615,7 +708,7 @@ static void handleButtons(uint8_t pressed)
     if (pressed & BUTTON_C)
     {
         displayOn = 0;
-        SH1107_SetDisplayOn(0);
+        applyDisplayPower();
         Log_Print("Display aus (Taster C), beliebiger Taster schaltet es wieder ein\r\n");
     }
     if (cfg.page != page)
@@ -963,6 +1056,19 @@ static void printSettings(void)
     Log_Print(line);
     sprintf(line, "LED-Helligkeit: %u\r\n", cfg.brightness);
     Log_Print(line);
+    if (cfg.dimMinutes)
+        sprintf(line, "Bildschirmschoner: dimmen nach %u min, ", cfg.dimMinutes);
+    else
+        strcpy(line, "Bildschirmschoner: nicht dimmen, ");
+    Log_Print(line);
+    if (cfg.offMinutes)
+        sprintf(line, "aus nach %u min\r\n", cfg.offMinutes);
+    else
+        strcpy(line, "nicht ausschalten\r\n");
+    Log_Print(line);
+    sprintf(line, "Display jetzt: %s, letzter Tastendruck vor %lu s\r\n", saverName(),
+            (unsigned long)((HAL_GetTick() - tActivity) / 1000UL));
+    Log_Print(line);
     Log_Print(cfgDirty ? "Einstellungen: noch nicht gespeichert\r\n" : "Einstellungen: gespeichert\r\n");
 }
 
@@ -1012,6 +1118,8 @@ static void printHelp(void)
               "  set high <C>      Ampel rot ab dieser Temperatur\r\n"
               "  set wet <%>       Regenbogen/Lueften ab dieser Luftfeuchte\r\n"
               "  set bright <0-255> LED-Helligkeit\r\n"
+              "  set dim <min>     Display dimmen nach x min ohne Tastendruck (0 = nie)\r\n"
+              "  set off <min>     Display aus nach x min ohne Tastendruck (0 = nie)\r\n"
               "  defaults          alle Einstellungen auf Werkseinstellung\r\n"
               "  Einstellungen werden automatisch im Flash gespeichert.\r\n"
               "  dfu               in den USB-Bootloader springen (Firmware-Update)\r\n"
@@ -1044,7 +1152,7 @@ static void handleSet(char *args)
 
     if (name == NULL || !parseFloat(valueStr, &value))
     {
-        Log_Print("Verwendung: set low|high|wet|bright <wert>\r\n");
+        Log_Print("Verwendung: set low|high|wet|bright|dim|off <wert>\r\n");
         return;
     }
 
@@ -1085,9 +1193,22 @@ static void handleSet(char *args)
         cfg.brightness = (uint8_t)value;
         applyBrightness();
     }
+    else if (strcmp(name, "dim") == 0 || strcmp(name, "off") == 0)
+    {
+        if (value < 0.0f || value > 255.0f)
+        {
+            Log_Print("Fehler: Minuten muessen zwischen 0 und 255 liegen (0 = nie)\r\n");
+            return;
+        }
+        if (name[0] == 'd')
+            cfg.dimMinutes = (uint8_t)value;
+        else
+            cfg.offMinutes = (uint8_t)value;
+        wakeDisplay(); // neue Zeiten gelten ab jetzt
+    }
     else
     {
-        Log_Print("Unbekannter Wert, erlaubt: low, high, wet, bright\r\n");
+        Log_Print("Unbekannter Wert, erlaubt: low, high, wet, bright, dim, off\r\n");
         return;
     }
 
@@ -1193,6 +1314,7 @@ void App_Init(WS2812Controller *ledController, UART_HandleTypeDef *huart)
         showAmpel(ampel);
     }
     tSensorRetry = HAL_GetTick();
+    tActivity = HAL_GetTick(); // Bildschirmschoner startet ab jetzt
 
     bmpOk = (BMP_Init(&bmp, &hi2c1) == HAL_OK);
     tBmpRetry = HAL_GetTick();
@@ -1251,6 +1373,8 @@ void App_Process(void)
     Console_Process();
     Log_Process();
 
+    updateScreensaver(now);
+
     if (!displayOk)
     {
         // Display neu suchen, z.B. nach Wackelkontakt oder zu fruehem Start
@@ -1261,13 +1385,12 @@ void App_Process(void)
             {
                 displayOk = 1;
                 displayDirty = 1;
-                if (!displayOn)
-                    SH1107_SetDisplayOn(0);
+                applyDisplayPower(); // Init setzt Kontrast und "an" zurueck
                 Log_Print("SH1107 gefunden\r\n");
             }
         }
     }
-    else if (displayOn && (displayDirty || now - tDisplay >= DISPLAY_INTERVAL_MS))
+    else if (displayVisible() && (displayDirty || now - tDisplay >= DISPLAY_INTERVAL_MS))
     {
         tDisplay = now;
         displayDirty = 0;

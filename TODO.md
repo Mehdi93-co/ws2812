@@ -32,7 +32,7 @@ Hardware: Adafruit Feather STM32F405, OLED FeatherWing 128x64 (SH1107), LPS22, H
 - [ ] Helligkeit der LEDs per Poti (ADC PC5) oder Taster (per USB schon: `set bright`)
 
 ### Display
-- [ ] Bildschirmschoner: Display nach X Minuten ohne Tastendruck dimmen/aus (OLED-Einbrennen)
+- [x] Bildschirmschoner: Display nach X Minuten ohne Tastendruck dimmen/aus (OLED-Einbrennen)
 - [ ] Nachtmodus: LEDs und Display nachts dunkler (braucht RTC mit Uhrzeit)
 - [ ] Feuchte-Verlauf als Diagramm
 - [ ] Druck-Verlauf über 24 Stunden als Diagramm

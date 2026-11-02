@@ -21,10 +21,15 @@ typedef struct
     float humWet;
     uint8_t brightness;
     uint8_t page;
-    uint8_t reserved1[2];
-    uint32_t reserved2;
-    uint32_t crc; // ueber alle Bytes davor
+    uint8_t dimMinutes; // ab FLAG_SCREENSAVER, vorher reserviert (0)
+    uint8_t offMinutes;
+    uint32_t flags; // welche spaeter hinzugekommenen Felder gueltig sind, vorher reserviert (0)
+    uint32_t crc;   // ueber alle Bytes davor
 } Record;
+
+// Neue Felder werden ueber Flags markiert statt SETTINGS_VERSION zu erhoehen,
+// so bleiben aeltere Eintraege (mit 0 in den reservierten Bytes) weiter lesbar
+#define FLAG_SCREENSAVER 0x00000001UL
 
 _Static_assert(sizeof(Record) == 32, "Record muss 32 Byte gross sein");
 
@@ -134,6 +139,11 @@ uint8_t Settings_Load(Settings *s)
     s->humWet = r->humWet;
     s->brightness = r->brightness;
     s->page = r->page;
+    if (r->flags & FLAG_SCREENSAVER)
+    {
+        s->dimMinutes = r->dimMinutes;
+        s->offMinutes = r->offMinutes;
+    }
     return 1;
 }
 
@@ -148,6 +158,9 @@ HAL_StatusTypeDef Settings_Save(const Settings *s)
     rec.humWet = s->humWet;
     rec.brightness = s->brightness;
     rec.page = s->page;
+    rec.dimMinutes = s->dimMinutes;
+    rec.offMinutes = s->offMinutes;
+    rec.flags = FLAG_SCREENSAVER;
     rec.crc = crc32((const uint8_t *)&rec, offsetof(Record, crc));
 
     int32_t last;

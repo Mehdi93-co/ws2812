@@ -9,6 +9,8 @@
 #define SH1107_WIDTH 128 // logische Breite (quer)
 #define SH1107_HEIGHT 64 // logische Hoehe
 
+#define SH1107_CONTRAST_NORMAL 0x4F // Wert aus der Adafruit-Init-Sequenz
+
 // Sonderzeichen in der Font, Verwendung: "23.5" SH1107_DEG "C"
 #define SH1107_DEG "\x7F"
 #define SH1107_ARROW_UP "\x80"
@@ -17,6 +19,8 @@
 
 HAL_StatusTypeDef SH1107_Init(I2C_HandleTypeDef *hi2c);
 HAL_StatusTypeDef SH1107_SetDisplayOn(uint8_t on);
+// Helligkeit 0..255 (SH1107_CONTRAST_NORMAL nach dem Init)
+HAL_StatusTypeDef SH1107_SetContrast(uint8_t contrast);
 // Schaltet fuer durationMs alle Pixel ein (Test, ob das Panel selbst funktioniert)
 HAL_StatusTypeDef SH1107_SelfTest(uint32_t durationMs);
 void SH1107_Clear(void);
