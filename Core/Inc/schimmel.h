@@ -15,10 +15,9 @@ typedef enum
 } SchimmelLevel;
 
 void Schimmel_Init(void);
-// Regelmaessig mit den aktuellen Raumwerten aufrufen.
-// wallDelta = so viel kaelter als die Raumluft wird die Wand angenommen (Grad C).
-// Gibt 1 zurueck, wenn die Warnung neu ausgeloest oder beendet wurde.
-uint8_t Schimmel_Update(uint32_t now, float temperature, float humidity, float wallDelta);
+// Regelmaessig mit den aktuellen Raumwerten und der Temperatur der Wandoberflaeche aufrufen
+// (gemessen oder geschaetzt). Gibt 1 zurueck, wenn die Warnung neu ausgeloest oder beendet wurde.
+uint8_t Schimmel_Update(uint32_t now, float temperature, float humidity, float wallTemperature);
 void Schimmel_Reset(void);
 
 SchimmelLevel Schimmel_GetLevel(void);
@@ -26,5 +25,8 @@ float Schimmel_GetWallHumidity(void); // geschaetzte relative Feuchte an der Wan
 uint16_t Schimmel_GetCriticalMinutes(void); // Minuten mit Wandfeuchte >= 80 % in den letzten 24 h
 uint8_t Schimmel_IsWarning(void);           // kritische Zeit ueberschritten
 const char *Schimmel_LevelName(SchimmelLevel level);
+// Zum Testen: Warnung sofort einschalten. Sie endet bei der naechsten Auswertung (spaetestens nach 1 min)
+// von selbst, wenn die kritische Zeit in Wirklichkeit unter der Grenze liegt.
+void Schimmel_TestWarning(void);
 
 #endif // SCHIMMEL_H

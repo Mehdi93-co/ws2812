@@ -17,6 +17,7 @@ typedef struct
     uint8_t dimMinutes; // Bildschirmschoner: dimmen nach x min ohne Tastendruck (0 = nie)
     uint8_t offMinutes; // Bildschirmschoner: aus nach x min ohne Tastendruck (0 = nie)
     float wallDelta;    // Schimmelrisiko: so viel kaelter als die Raumluft ist die Wand (Grad C)
+    uint8_t wallSensor; // 1 = BMP180/BMP280 sitzt an der Wand und misst die Wandtemperatur
 } Settings;
 
 // Laedt den letzten gueltigen Eintrag. Gibt 0 zurueck (und laesst *s unveraendert), wenn keiner existiert.

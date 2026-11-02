@@ -31,6 +31,9 @@ typedef struct
 // so bleiben aeltere Eintraege (mit 0 in den reservierten Bytes) weiter lesbar
 #define FLAG_SCREENSAVER 0x00000001UL
 #define FLAG_WALL 0x00000002UL
+// Ein-Bit-Einstellungen direkt in flags: VALID sagt, dass das Bit gespeichert wurde
+#define FLAG_WALLSENSOR_VALID 0x00000004UL
+#define FLAG_WALLSENSOR_ON 0x00000008UL
 
 _Static_assert(sizeof(Record) == 32, "Record muss 32 Byte gross sein");
 
@@ -147,6 +150,8 @@ uint8_t Settings_Load(Settings *s)
     }
     if (r->flags & FLAG_WALL)
         s->wallDelta = r->wallDeltaTenths / 10.0f;
+    if (r->flags & FLAG_WALLSENSOR_VALID)
+        s->wallSensor = (r->flags & FLAG_WALLSENSOR_ON) ? 1 : 0;
     return 1;
 }
 
@@ -164,7 +169,9 @@ HAL_StatusTypeDef Settings_Save(const Settings *s)
     rec.dimMinutes = s->dimMinutes;
     rec.offMinutes = s->offMinutes;
     rec.wallDeltaTenths = (int16_t)(s->wallDelta * 10.0f + (s->wallDelta >= 0.0f ? 0.5f : -0.5f));
-    rec.flags = FLAG_SCREENSAVER | FLAG_WALL;
+    rec.flags = FLAG_SCREENSAVER | FLAG_WALL | FLAG_WALLSENSOR_VALID;
+    if (s->wallSensor)
+        rec.flags |= FLAG_WALLSENSOR_ON;
     rec.crc = crc32((const uint8_t *)&rec, offsetof(Record, crc));
 
     int32_t last;

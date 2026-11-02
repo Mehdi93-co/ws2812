@@ -41,6 +41,7 @@ Hardware: Adafruit Feather STM32F405, OLED FeatherWing 128x64 (SH1107), LPS22, H
 - [x] Lüft-Assistent: Fenster offen erkennen, „Fenster kann zu“ melden, 15 min Pause danach
 - [x] Anzeige, wie lange schon gelüftet wird
 - [x] Schimmelrisiko aus Temperatur, Feuchte und Wandtemperatur (Schätzung) berechnen und warnen
+- [x] BMP180/BMP280 als Wandsensor: gemessene statt geschätzte Wandtemperatur (`set wallsensor`)
 
 ### Wetter
 - [ ] Sturmwarnung: Druckabfall > 3 hPa in 3 h, LEDs pulsieren rot

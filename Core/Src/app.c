@@ -58,6 +58,7 @@
 #define RAINBOW_STEP 4      // Farbverschiebung pro Bild (0..255 = ein Umlauf)
 #define BREATH_PERIOD_MS 3000 // Lueften laeuft: blaues "Atmen", Dauer eines Atemzugs
 #define DONE_BLINK_MS 500     // Fenster kann zu: gruenes Blinken
+#define MOLD_PULSE_PERIOD_MS 4000 // Schimmel-Warnung: violettes Pulsieren
 
 // Verlaufsdiagramm: ein Punkt pro Pixelspalte
 #define GRAPH_INTERVAL_MS 10000UL // 128 Punkte x 10 s = ca. 21 min
@@ -117,6 +118,7 @@ static const Settings cfgDefaults = {
     .dimMinutes = SAVER_DIM_MIN_DEFAULT,
     .offMinutes = SAVER_OFF_MIN_DEFAULT,
     .wallDelta = WALL_DELTA_DEFAULT,
+    .wallSensor = 1, // BMP an der Wand nutzen, wenn vorhanden
 };
 static Settings cfg;
 static uint8_t cfgDirty;  // geaendert, aber noch nicht gespeichert
@@ -156,10 +158,22 @@ static AmpelState ampelShown = (AmpelState)0xFF; // was zuletzt auf den LEDs war
 static uint8_t rainbowOffset;
 static uint32_t tRainbow; // letztes Bild der Lueft-Animation
 
-// Solange der Lueft-Assistent aktiv ist, gehoeren ihm die LEDs
-static uint8_t lueftOwnsLeds(void)
+// Wer die LEDs gerade steuert, nach Wichtigkeit:
+// 1. Lueft-Assistent (der Nutzer soll etwas tun), 2. Schimmel-Warnung, 3. Temperatur-Ampel
+typedef enum
 {
-    return Lueft_GetState() != LUEFT_AUS;
+    LED_AMPEL,
+    LED_LUEFT,
+    LED_SCHIMMEL
+} LedMode;
+
+static LedMode ledMode(void)
+{
+    if (Lueft_GetState() != LUEFT_AUS)
+        return LED_LUEFT;
+    if (Schimmel_IsWarning())
+        return LED_SCHIMMEL;
+    return LED_AMPEL;
 }
 
 static float graphData[SH1107_WIDTH];
@@ -313,7 +327,7 @@ static void showAmpel(AmpelState state)
 {
     uint8_t red = 0, green = 0, blue = 0;
     // Waehrend des Lueftens gehoeren die LEDs dem Lueft-Assistenten
-    if (lueftOwnsLeds() || state == ampelShown)
+    if (ledMode() != LED_AMPEL || state == ampelShown)
         return;
     ampelShown = state;
 
@@ -394,12 +408,42 @@ static void drawSolid(uint8_t red, uint8_t green, uint8_t blue)
     WS2812_Update(leds);
 }
 
-// LED-Animation je nach Zustand: noetig = Regenbogen, laeuft = blau atmend, fertig = gruen blinkend
-static void lueftLeds(uint32_t now)
+// 0..1..0 im Takt von periodMs, fuer "atmende" bzw. pulsierende LEDs
+static float pulseLevel(uint32_t now, uint32_t periodMs)
 {
-    if (!lueftOwnsLeds() || now - tRainbow < RAINBOW_FRAME_MS)
+    float phase = (float)(now % periodMs) / periodMs;
+    return 0.5f - 0.5f * cosf(6.2831853f * phase);
+}
+
+// LED-Animationen von Lueft-Assistent und Schimmel-Warnung, sonst die Ampel
+//   Lueften noetig = Regenbogen, laeuft = blau atmend, fertig = gruen blinkend
+//   Schimmel-Warnung = violett pulsierend
+static void animateLeds(uint32_t now)
+{
+    static LedMode lastMode = LED_AMPEL;
+    LedMode mode = ledMode();
+
+    if (mode != lastMode)
+    {
+        lastMode = mode;
+        if (mode == LED_AMPEL)
+        {
+            // Animation vorbei: Ampel neu zeichnen, die LEDs zeigen noch das letzte Bild
+            ampelShown = (AmpelState)0xFF;
+            showAmpel(ampel);
+            return;
+        }
+    }
+    if (mode == LED_AMPEL || now - tRainbow < RAINBOW_FRAME_MS)
         return;
     tRainbow = now;
+
+    if (mode == LED_SCHIMMEL)
+    {
+        float level = pulseLevel(now, MOLD_PULSE_PERIOD_MS);
+        drawSolid((uint8_t)(20.0f + 140.0f * level), 0, (uint8_t)(30.0f + 225.0f * level));
+        return;
+    }
 
     switch (Lueft_GetState())
     {
@@ -407,12 +451,8 @@ static void lueftLeds(uint32_t now)
         drawRainbow();
         break;
     case LUEFT_LAEUFT:
-    {
-        float phase = (float)(now % BREATH_PERIOD_MS) / BREATH_PERIOD_MS;
-        float level = 0.5f - 0.5f * cosf(6.2831853f * phase); // 0..1..0
-        drawSolid(0, 0, (uint8_t)(40.0f + 215.0f * level));
+        drawSolid(0, 0, (uint8_t)(40.0f + 215.0f * pulseLevel(now, BREATH_PERIOD_MS)));
         break;
-    }
     case LUEFT_FERTIG:
         if ((now / DONE_BLINK_MS) & 1)
             drawSolid(0, 0, 0);
@@ -476,10 +516,7 @@ static void updateLueften(uint32_t now)
         }
         break;
     default:
-        Log_Print("Lueft-Assistent: alles ok\r\n");
-        // Ampel neu zeichnen, die LEDs zeigen noch die Lueft-Animation
-        ampelShown = (AmpelState)0xFF;
-        showAmpel(ampel);
+        Log_Print("Lueft-Assistent: alles ok\r\n"); // Ampel zeichnet animateLeds() neu
         break;
     }
     // Hinweise zum Lueften sollen sichtbar sein, auch wenn der Bildschirmschoner aktiv ist
@@ -510,13 +547,37 @@ static void schimmelText(char *out)
         sprintf(out, "Schimmel: %s", Schimmel_LevelName(Schimmel_GetLevel()));
 }
 
+// Wandtemperatur gemessen, wenn der BMP als Wandsensor eingestellt ist und Werte liefert
+static uint8_t wallMeasured(void)
+{
+    return cfg.wallSensor && bmpOk && bmpHaveValues;
+}
+
+// Gemessen vom BMP an der Wand, sonst geschaetzt aus Raumtemperatur minus "set wall"
+static float wallTemperature(void)
+{
+    return wallMeasured() ? bmpTemp : htuTemp - cfg.wallDelta;
+}
+
 static void updateSchimmel(uint32_t now)
 {
+    static int8_t lastMeasured = -1;
+
     // Ohne Feuchtesensor nichts bewerten, die 24-h-Historie bleibt fuer kurze Ausfaelle erhalten
     if (!htuOk || !htuHaveValues)
         return;
 
-    if (Schimmel_Update(now, htuTemp, htuHum, cfg.wallDelta))
+    // Wechsel zwischen gemessen und geschaetzt melden (z.B. BMP abgesteckt)
+    uint8_t measured = wallMeasured();
+    if (measured != lastMeasured)
+    {
+        Log_Print(measured ? "Wandtemperatur: gemessen mit dem BMP-Sensor\r\n"
+                           : "Wandtemperatur: geschaetzt (Raumtemperatur - set wall)\r\n");
+        lastMeasured = measured;
+        displayDirty = 1;
+    }
+
+    if (Schimmel_Update(now, htuTemp, htuHum, wallTemperature()))
     {
         if (Schimmel_IsWarning())
         {
@@ -801,7 +862,12 @@ static void drawPageWerte(void)
     SH1107_DrawString(0, 37, line, 2);
 
     const char *lueftText = lueftStatusText(HAL_GetTick(), line);
-    SH1107_DrawString(0, 56, lueftText ? lueftText : stateText[ampel], 1);
+    if (lueftText)
+        SH1107_DrawString(0, 56, lueftText, 1);
+    else if (Schimmel_IsWarning())
+        SH1107_DrawString(0, 56, "Schimmel-Warnung!", 1);
+    else
+        SH1107_DrawString(0, 56, stateText[ampel], 1);
 }
 
 static void drawPageSensor2(void)
@@ -817,7 +883,15 @@ static void drawPageSensor2(void)
         return;
     }
 
-    drawHeader(BMP_TypeName(bmp.type));
+    if (cfg.wallSensor)
+    {
+        sprintf(line, "%s (Wand)", BMP_TypeName(bmp.type));
+        drawHeader(line);
+    }
+    else
+    {
+        drawHeader(BMP_TypeName(bmp.type));
+    }
     if (!bmpHaveValues)
     {
         SH1107_DrawString(0, 28, "Warte auf Daten...", 1);
@@ -832,7 +906,13 @@ static void drawPageSensor2(void)
     sprintf(line, "Druck: %s hPa", value);
     SH1107_DrawString(0, 30, line, 1);
 
-    if (BMP_HasHumidity(&bmp))
+    if (wallMeasured() && htuHaveValues)
+    {
+        // Als Wandsensor: berechnete Feuchte an der Wandoberflaeche
+        formatFixed1(value, Schimmel_GetWallHumidity());
+        sprintf(line, "Wandfeuchte: %s %%", value);
+    }
+    else if (BMP_HasHumidity(&bmp))
     {
         formatFixed1(value, bmpHum);
         sprintf(line, "Feuchte: %s %%", value);
@@ -1027,7 +1107,7 @@ static HAL_StatusTypeDef render(void)
 
 static void printValues(void)
 {
-    char p[16], t[16], line[96];
+    char p[16], t[16], line[128];
     if (!haveValues)
         return;
     formatFixed1(p, pressure);
@@ -1056,8 +1136,10 @@ static void printValues(void)
         sprintf(line, "HTU2x: Temp: %s C, Feuchte: %s %%rH%s\r\n", t, h, htuOk ? "" : " (Sensor Fehler)");
         Log_Print(line);
 
+        formatFixed1(t, wallTemperature());
         formatFixed1(h, Schimmel_GetWallHumidity());
-        sprintf(line, "Wand: Feuchte %s %%rH, Schimmelrisiko %s, kritisch %u min/24h%s\r\n", h,
+        sprintf(line, "Wand (%s): %s C, Feuchte %s %%rH, Schimmelrisiko %s, kritisch %u min/24h%s\r\n",
+                wallMeasured() ? "gemessen" : "geschaetzt", t, h,
                 Schimmel_LevelName(Schimmel_GetLevel()), Schimmel_GetCriticalMinutes(),
                 Schimmel_IsWarning() ? " WARNUNG" : "");
         Log_Print(line);
@@ -1125,7 +1207,12 @@ static void printSettings(void)
         strcpy(line, "nicht ausschalten\r\n");
     Log_Print(line);
     formatFixed1(a, cfg.wallDelta);
-    sprintf(line, "Schimmelrisiko: Wand %s C kaelter als die Raumluft\r\n", a);
+    if (!cfg.wallSensor)
+        sprintf(line, "Schimmelrisiko: Wand geschaetzt, %s C kaelter als die Raumluft\r\n", a);
+    else if (wallMeasured())
+        sprintf(line, "Schimmelrisiko: Wand gemessen mit %s\r\n", BMP_TypeName(bmp.type));
+    else
+        sprintf(line, "Schimmelrisiko: Wandsensor fehlt, geschaetzt mit %s C\r\n", a);
     Log_Print(line);
     sprintf(line, "Display jetzt: %s, letzter Tastendruck vor %lu s\r\n", saverName(),
             (unsigned long)((HAL_GetTick() - tActivity) / 1000UL));
@@ -1183,7 +1270,9 @@ static void printHelp(void)
               "  set dim <min>     Display dimmen nach x min ohne Tastendruck (0 = nie)\r\n"
               "  set off <min>     Display aus nach x min ohne Tastendruck (0 = nie)\r\n"
               "  set wall <C>      Schimmelrisiko: Wand so viel kaelter als die Raumluft (0-15)\r\n"
+              "  set wallsensor 1|0 BMP-Sensor an der Wand nutzen (1) oder nur schaetzen (0)\r\n"
               "  defaults          alle Einstellungen auf Werkseinstellung\r\n"
+              "  test schimmel     Schimmel-Warnung ca. 1 min lang vorfuehren\r\n"
               "  Einstellungen werden automatisch im Flash gespeichert.\r\n"
               "  dfu               in den USB-Bootloader springen (Firmware-Update)\r\n"
               "  reset             Neustart\r\n");
@@ -1215,7 +1304,7 @@ static void handleSet(char *args)
 
     if (name == NULL || !parseFloat(valueStr, &value))
     {
-        Log_Print("Verwendung: set low|high|wet|bright|dim|off|wall <wert>\r\n");
+        Log_Print("Verwendung: set low|high|wet|bright|dim|off|wall|wallsensor <wert>\r\n");
         return;
     }
 
@@ -1278,9 +1367,18 @@ static void handleSet(char *args)
         }
         cfg.wallDelta = value;
     }
+    else if (strcmp(name, "wallsensor") == 0)
+    {
+        if (value != 0.0f && value != 1.0f)
+        {
+            Log_Print("Fehler: wallsensor muss 0 oder 1 sein\r\n");
+            return;
+        }
+        cfg.wallSensor = (uint8_t)value;
+    }
     else
     {
-        Log_Print("Unbekannter Wert, erlaubt: low, high, wet, bright, dim, off, wall\r\n");
+        Log_Print("Unbekannter Wert, erlaubt: low, high, wet, bright, dim, off, wall, wallsensor\r\n");
         return;
     }
 
@@ -1309,6 +1407,13 @@ static void handleCommand(char *line)
     else if (strcmp(cmd, "set") == 0)
     {
         handleSet(args);
+    }
+    else if (strcmp(cmd, "test") == 0 && args && strcmp(args, "schimmel") == 0)
+    {
+        Schimmel_TestWarning();
+        wakeDisplay();
+        displayDirty = 1;
+        Log_Print("Test: Schimmel-Warnung fuer ca. 1 min eingeschaltet\r\n");
     }
     else if (strcmp(cmd, "defaults") == 0)
     {
@@ -1419,7 +1524,7 @@ void App_Process(void)
     htuMeasure(now);
     updateLueften(now);
     updateSchimmel(now);
-    lueftLeds(now);
+    animateLeds(now);
 
     if (haveValues && now - tGraph >= GRAPH_INTERVAL_MS)
     {

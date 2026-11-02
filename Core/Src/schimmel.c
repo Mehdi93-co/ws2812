@@ -55,11 +55,11 @@ void Schimmel_Reset(void)
     warning = 0;
 }
 
-uint8_t Schimmel_Update(uint32_t now, float temperature, float humidity, float wallDelta)
+uint8_t Schimmel_Update(uint32_t now, float temperature, float humidity, float wallTemperature)
 {
     // Gleicher Wasserdampf-Partialdruck wie im Raum, aber bei der kaelteren Wandtemperatur
     float vapour = humidity / 100.0f * saturationPressure(temperature);
-    wallHumidity = 100.0f * vapour / saturationPressure(temperature - wallDelta);
+    wallHumidity = 100.0f * vapour / saturationPressure(wallTemperature);
 
     if (wallHumidity >= WALL_RH_CONDENSATE)
         level = SCHIMMEL_KONDENSAT;
@@ -113,6 +113,11 @@ uint16_t Schimmel_GetCriticalMinutes(void)
 uint8_t Schimmel_IsWarning(void)
 {
     return warning;
+}
+
+void Schimmel_TestWarning(void)
+{
+    warning = 1;
 }
 
 const char *Schimmel_LevelName(SchimmelLevel l)
