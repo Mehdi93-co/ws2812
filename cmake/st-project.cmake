@@ -97,6 +97,7 @@ target_sources(
     "Core\\Src\\log.c"
     "Core\\Src\\console.c"
     "Core\\Src\\bootloader.c"
+    "Core\\Src\\settings.c"
     "Core\\Startup\\startup_stm32f405rgtx.s"
     "Middlewares\\ST\\STM32_USB_Device_Library\\Class\\CDC\\Src\\usbd_cdc.c"
     "Middlewares\\ST\\STM32_USB_Device_Library\\Core\\Src\\usbd_core.c"

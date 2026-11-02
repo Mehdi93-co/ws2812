@@ -27,9 +27,9 @@ Hardware: Adafruit Feather STM32F405, OLED FeatherWing 128x64 (SH1107), LPS22, H
 ### Bedienung
 - [x] **USB-Befehle** im Terminal: `help`, `status`, `set low|high|wet`, `reset`
 - [x] **`dfu`-Befehl**: per USB in den Bootloader springen, ohne BOOT0 umzustecken
-- [ ] **Einstellungen im Flash speichern** (Schwellwerte, Helligkeit, letzte Display-Seite)
+- [x] **Einstellungen im Flash speichern** (Schwellwerte, Helligkeit, letzte Display-Seite)
 - [ ] Schwellwerte über die Taster einstellen (Einstellungs-Seite)
-- [ ] Helligkeit der LEDs per Poti (ADC PC5) oder Taster
+- [ ] Helligkeit der LEDs per Poti (ADC PC5) oder Taster (per USB schon: `set bright`)
 
 ### Display
 - [ ] Bildschirmschoner: Display nach X Minuten ohne Tastendruck dimmen/aus (OLED-Einbrennen)

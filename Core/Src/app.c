@@ -9,6 +9,7 @@
 #include "log.h"
 #include "console.h"
 #include "bootloader.h"
+#include "settings.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,6 +20,9 @@
 #define TEMP_LOW_DEFAULT 18.0f
 #define TEMP_HIGH_DEFAULT 26.0f
 #define TEMP_HYST 0.5f // Hysterese, damit die Ampel an der Grenze nicht flackert
+
+#define BRIGHTNESS_DEFAULT 128     // LED-Helligkeit 0..255
+#define SETTINGS_SAVE_DELAY_MS 3000 // erst speichern, wenn sich 3 s nichts mehr geaendert hat
 
 #define FILTER_ALPHA 0.2f // Glaettung 0..1, kleiner = ruhiger, aber traeger
 
@@ -36,7 +40,7 @@
 // Bewertung der Luftfeuchte in %rH
 #define HUM_DRY 30.0f
 #define HUM_WET_DEFAULT 60.0f // darueber: Lueften-Anzeige (Regenbogen-Lauflicht)
-#define HUM_HYST 2.0f // Regenbogen geht erst unter humWet - HUM_HYST wieder aus
+#define HUM_HYST 2.0f // Regenbogen geht erst unter cfg.humWet - HUM_HYST wieder aus
 
 // Regenbogen-Lauflicht
 #define RAINBOW_FRAME_MS 30 // Bildwechsel, kleiner = schneller
@@ -90,10 +94,18 @@ typedef struct
 static WS2812Controller *leds;
 static LPS22_Handle lps22;
 
-// Schwellwerte, per USB-Befehl "set" aenderbar (noch nicht im Flash gespeichert)
-static float tempLow = TEMP_LOW_DEFAULT;
-static float tempHigh = TEMP_HIGH_DEFAULT;
-static float humWet = HUM_WET_DEFAULT;
+// Einstellungen, per USB-Befehl "set" aenderbar und im Flash gespeichert
+static const Settings cfgDefaults = {
+    .tempLow = TEMP_LOW_DEFAULT,
+    .tempHigh = TEMP_HIGH_DEFAULT,
+    .humWet = HUM_WET_DEFAULT,
+    .brightness = BRIGHTNESS_DEFAULT,
+    .page = 0,
+};
+static Settings cfg;
+static uint8_t cfgDirty;  // geaendert, aber noch nicht gespeichert
+static uint8_t cfgLoaded; // beim Start aus dem Flash geladen
+static uint32_t tCfgChanged;
 
 static uint8_t displayOk;
 static uint8_t displayOn = 1;
@@ -138,6 +150,13 @@ static uint32_t tDisplayRetry;
 static uint32_t tMeasure, tDisplay, tPrint, tButtons, tSensorRetry, tGraph, tTrend;
 
 /* ---------- Hilfsfunktionen ---------- */
+// Gespeichert wird verzoegert (SETTINGS_SAVE_DELAY_MS), damit schnelles Blaettern nur einen Eintrag erzeugt
+static void markCfgChanged(void)
+{
+    cfgDirty = 1;
+    tCfgChanged = HAL_GetTick();
+}
+
 // Float mit einer Nachkommastelle formatieren (nano-libc kann ohne Zusatzflag kein %f)
 static void formatFixed1(char *out, float value)
 {
@@ -172,18 +191,18 @@ static void resetMinMax(void)
 static AmpelState nextAmpelState(AmpelState state, float t)
 {
     // Aus Rot/Gelb erst zurueck, wenn die Grenze um TEMP_HYST unterschritten ist
-    if (state == AMPEL_ROT && t < tempHigh - TEMP_HYST)
+    if (state == AMPEL_ROT && t < cfg.tempHigh - TEMP_HYST)
         state = AMPEL_GRUEN;
-    else if (state == AMPEL_GELB && t > tempLow + TEMP_HYST)
+    else if (state == AMPEL_GELB && t > cfg.tempLow + TEMP_HYST)
         state = AMPEL_GRUEN;
     else if (state == AMPEL_FEHLER)
         state = AMPEL_GRUEN;
 
     if (state == AMPEL_GRUEN)
     {
-        if (t >= tempHigh)
+        if (t >= cfg.tempHigh)
             state = AMPEL_ROT;
-        else if (t <= tempLow)
+        else if (t <= cfg.tempLow)
             state = AMPEL_GELB;
     }
     return state;
@@ -271,9 +290,9 @@ static void updateLueften(void)
 
     if (!htuOk || !htuHaveValues)
         lueften = 0;
-    else if (!lueften && htuHum > humWet)
+    else if (!lueften && htuHum > cfg.humWet)
         lueften = 1;
-    else if (lueften && htuHum < humWet - HUM_HYST)
+    else if (lueften && htuHum < cfg.humWet - HUM_HYST)
         lueften = 0;
 
     if (lueften == before)
@@ -514,6 +533,11 @@ static void handleButtons(uint8_t pressed)
         displayOn = 0;
         SH1107_SetDisplayOn(0);
         Log_Print("Display aus (Taster C), beliebiger Taster schaltet es wieder ein\r\n");
+    }
+    if (cfg.page != page)
+    {
+        cfg.page = page; // Seite merken, damit sie nach dem Neustart wieder erscheint
+        markCfgChanged();
     }
     displayDirty = 1;
 }
@@ -832,6 +856,7 @@ static void printStatus(void)
     }
 
     Log_Print(htuOk ? "HTU2x OK, Adresse 0x40\r\n" : "HTU2x nicht gefunden (0x40)\r\n");
+    Log_Print(cfgLoaded ? "Einstellungen aus dem Flash geladen\r\n" : "Werkseinstellungen aktiv\r\n");
     Log_Print("'help' zeigt alle Befehle\r\n");
 }
 
@@ -839,13 +864,53 @@ static void printStatus(void)
 static void printSettings(void)
 {
     char line[64], a[16], b[16];
-    formatFixed1(a, tempLow);
-    formatFixed1(b, tempHigh);
+    formatFixed1(a, cfg.tempLow);
+    formatFixed1(b, cfg.tempHigh);
     sprintf(line, "Ampel: gelb <= %s C, rot >= %s C\r\n", a, b);
     Log_Print(line);
-    formatFixed1(a, humWet);
+    formatFixed1(a, cfg.humWet);
     sprintf(line, "Lueften ab %s %%rH\r\n", a);
     Log_Print(line);
+    sprintf(line, "LED-Helligkeit: %u\r\n", cfg.brightness);
+    Log_Print(line);
+    Log_Print(cfgDirty ? "Einstellungen: noch nicht gespeichert\r\n" : "Einstellungen: gespeichert\r\n");
+}
+
+static void applyBrightness(void)
+{
+    WS2812_SetBrightness(leds, cfg.brightness);
+    // Ampel mit der neuen Helligkeit neu zeichnen (der Regenbogen aktualisiert sich selbst)
+    ampelShown = (AmpelState)0xFF;
+    showAmpel(ampel);
+}
+
+static uint8_t cfgValid(const Settings *s)
+{
+    // Positiv formuliert, damit auch NaN aus einem kaputten Eintrag abgelehnt wird
+    return s->tempLow >= -40.0f && s->tempLow <= 85.0f &&
+           s->tempHigh >= -40.0f && s->tempHigh <= 85.0f && s->tempLow < s->tempHigh &&
+           s->humWet > HUM_HYST && s->humWet <= 100.0f &&
+           s->page < PAGE_COUNT;
+}
+
+static void saveCfgNow(void)
+{
+    if (!cfgDirty)
+        return;
+    cfgDirty = 0;
+    Log_Print(Settings_Save(&cfg) == HAL_OK ? "Einstellungen gespeichert\r\n"
+                                            : "Fehler beim Speichern der Einstellungen\r\n");
+}
+
+// Ampel mit den aktuellen Grenzen neu bewerten
+static void reevaluateAmpel(void)
+{
+    if (haveValues && sensorOk)
+    {
+        ampel = nextAmpelState(AMPEL_GRUEN, temperature);
+        showAmpel(ampel);
+    }
+    displayDirty = 1;
 }
 
 static void printHelp(void)
@@ -856,6 +921,9 @@ static void printHelp(void)
               "  set low <C>       Ampel gelb ab dieser Temperatur (und darunter)\r\n"
               "  set high <C>      Ampel rot ab dieser Temperatur\r\n"
               "  set wet <%>       Regenbogen/Lueften ab dieser Luftfeuchte\r\n"
+              "  set bright <0-255> LED-Helligkeit\r\n"
+              "  defaults          alle Einstellungen auf Werkseinstellung\r\n"
+              "  Einstellungen werden automatisch im Flash gespeichert.\r\n"
               "  dfu               in den USB-Bootloader springen (Firmware-Update)\r\n"
               "  reset             Neustart\r\n");
 }
@@ -886,27 +954,27 @@ static void handleSet(char *args)
 
     if (name == NULL || !parseFloat(valueStr, &value))
     {
-        Log_Print("Verwendung: set low|high|wet <wert>\r\n");
+        Log_Print("Verwendung: set low|high|wet|bright <wert>\r\n");
         return;
     }
 
     if (strcmp(name, "low") == 0)
     {
-        if (value >= tempHigh)
+        if (value >= cfg.tempHigh)
         {
             Log_Print("Fehler: low muss kleiner als high sein\r\n");
             return;
         }
-        tempLow = value;
+        cfg.tempLow = value;
     }
     else if (strcmp(name, "high") == 0)
     {
-        if (value <= tempLow)
+        if (value <= cfg.tempLow)
         {
             Log_Print("Fehler: high muss groesser als low sein\r\n");
             return;
         }
-        tempHigh = value;
+        cfg.tempHigh = value;
     }
     else if (strcmp(name, "wet") == 0)
     {
@@ -915,21 +983,26 @@ static void handleSet(char *args)
             Log_Print("Fehler: wet muss zwischen 3 und 100 liegen\r\n");
             return;
         }
-        humWet = value;
+        cfg.humWet = value;
+    }
+    else if (strcmp(name, "bright") == 0)
+    {
+        if (value < 0.0f || value > 255.0f)
+        {
+            Log_Print("Fehler: bright muss zwischen 0 und 255 liegen\r\n");
+            return;
+        }
+        cfg.brightness = (uint8_t)value;
+        applyBrightness();
     }
     else
     {
-        Log_Print("Unbekannter Wert, erlaubt: low, high, wet\r\n");
+        Log_Print("Unbekannter Wert, erlaubt: low, high, wet, bright\r\n");
         return;
     }
 
-    // Ampel mit den neuen Grenzen neu bewerten
-    if (haveValues && sensorOk)
-    {
-        ampel = nextAmpelState(AMPEL_GRUEN, temperature);
-        showAmpel(ampel);
-    }
-    displayDirty = 1;
+    reevaluateAmpel();
+    markCfgChanged();
     printSettings();
 }
 
@@ -954,14 +1027,27 @@ static void handleCommand(char *line)
     {
         handleSet(args);
     }
+    else if (strcmp(cmd, "defaults") == 0)
+    {
+        uint8_t keepPage = cfg.page;
+        cfg = cfgDefaults;
+        cfg.page = keepPage;
+        applyBrightness();
+        reevaluateAmpel();
+        markCfgChanged();
+        Log_Print("Werkseinstellungen geladen\r\n");
+        printSettings();
+    }
     else if (strcmp(cmd, "dfu") == 0)
     {
+        saveCfgNow();
         Log_Print("Springe in den DFU-Bootloader, jetzt flash_dfu.bat starten...\r\n");
         flushLog(200);
         Bootloader_Request();
     }
     else if (strcmp(cmd, "reset") == 0)
     {
+        saveCfgNow();
         Log_Print("Neustart...\r\n");
         flushLog(200);
         NVIC_SystemReset();
@@ -979,6 +1065,17 @@ void App_Init(WS2812Controller *ledController, UART_HandleTypeDef *huart)
     Log_Init(huart);
     Console_Init(handleCommand);
     Buttons_Init();
+
+    // Einstellungen aus dem Flash, bei fehlendem oder ungueltigem Eintrag Werkseinstellung
+    cfg = cfgDefaults;
+    cfgLoaded = Settings_Load(&cfg);
+    if (!cfgValid(&cfg))
+    {
+        cfg = cfgDefaults;
+        cfgLoaded = 0;
+    }
+    page = (Page)cfg.page;
+    WS2812_SetBrightness(leds, cfg.brightness);
 
     // Das OLED braucht nach dem Einschalten Zeit, sonst ignoriert es die Init-Befehle
     if (HAL_GetTick() < DISPLAY_POWERUP_MS)
@@ -1062,6 +1159,9 @@ void App_Process(void)
         tPrint = now;
         printValues();
     }
+    if (cfgDirty && now - tCfgChanged >= SETTINGS_SAVE_DELAY_MS)
+        saveCfgNow();
+
     Console_Process();
     Log_Process();
 
